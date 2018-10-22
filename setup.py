@@ -41,22 +41,31 @@ import os
 #sys.path.append('/Users/lieba/anaconda/lib/python2.7/site-packages')
 # (1.2) on my macbook air
 #sys.path.append('/Users/anna/anaconda/lib/python2.7/site-packages')
+# (1.2.1) DT's macbook pro
+sys.path.append('/anaconda2/lib/python2.7/site-packages')
+## I think if I use coda environments, this should already be on the path... but NO.
+
 #sys.path.append('/usr/local/Cellar/gcc49/4.9.2_1/lib/gcc/4.9/gcc/x86_64-apple-darwin12.6.0/4.9.2/include-fixed')
 #(1.3)if on linux VM (replace [USERNAME] with your username. Verify this location with $ which python2.7)
-sys.path.append('/home/xin/anaconda2/lib/python2.7/site-packages')
+#clearly Xin had the following:
+#sys.path.append('/home/xin/anaconda2/lib/python2.7/site-packages')
 
 
 ##!!!! below: you should specify compiler including path.
 # I uncomment either the lines below (2.1),(2.2), or (2.3)
 #(2.1) on my desktop
-#os.environ["CC"] = "gcc-4.9"
-#os.environ["CXX"] = "g++-4.9"
+os.environ["CC"] = "gcc-4.9"
+os.environ["CXX"] = "g++-4.9"
 #(2.2) on my macbook air
 #os.environ["CC"] = "/usr/local/bin/gcc-4.9"
 #os.environ["CXX"] = "/usr/local/bin/gcc-4.9"
 #(2.3) on a linux VM
-os.environ["CC"] = "/usr/bin/gcc-4.9"
-os.environ["CXX"] = "/usr/bin/g++-4.9"
+#os.environ["CC"] = "/usr/bin/gcc-4.9"
+#os.environ["CXX"] = "/usr/bin/g++-4.9"
+#(2.4) on DT Macbook pro
+#os.environ["CC"] = "/usr/bin/gcc-4.9"
+#os.environ["CXX"] = "/usr/bin/g++-4.9"
+
 
 from distutils.core import setup, Extension
 from Cython.Build import cythonize
@@ -66,9 +75,12 @@ print 'start'
 setup(ext_modules=cythonize(Extension(
     "allthethings",                                   # the extesion name
     sources=["allthethings.pyx", "channel.cpp", "setupandrun.cpp", "file_output.cc", "network.cpp", "levmar.cpp", "mp_mat.cpp",
-             "str_double.cpp", "mp_mat_double.cpp", "libcla.c","setup.py"],  # the Cython source and additional C++ source files
+             "str_double.cpp", "mp_mat_double.cpp", "libcla.c"],  # the Cython source and additional C++ source files
     # sources=["allthethings.pyx", "setupandrun.cpp", "file_output.cc","network.cpp", "levmar.cpp","mp_mat.cpp","str_double.cpp", "mp_mat_double.cpp"], # the Cython source and additional C++ source files
     # libraries=["lapack","cblas", "qd", "fftw3","m"],      #libraries to link
+    
+    #DT: Oct10,2018 removed ,"setup.py" from source list; no more double declaration warning :)
+    
     # against (I'm not sure if all are needed...but some are...)
     # libraries to link against (I'm not sure if all are needed...but some
     # are...)
@@ -77,13 +89,16 @@ setup(ext_modules=cythonize(Extension(
 
     # on orinoco
     # extra_link_args=['-DUSEOMP'],
-    extra_link_args=['-fopenmp'],
+    #extra_link_args=['-fopenmp'],
+    #DT added c++ specification - no effect
+    extra_link_args=['-fopenmp','-Wl,-rpath,/usr/local/opt/gcc/lib/gcc/8/','-std=c++11'],
+    #extra_link_args=[]
     # extra_compile_args=['-DUSEOMP'],
     extra_compile_args=['-fopenmp'],
     # so it can find, e.g. numpy/arrayobject.h
     # on orinoco
-    include_dirs=[numpy.get_include(),"/home/xin", "/usr/include"]   #so it can find, e.g. numpy/arrayobject.h
+    #include_dirs=[numpy.get_include(),"/home/xin", "/usr/include"]   #so it can find, e.g. numpy/arrayobject.h
     # on macbook Air
-    #include_dirs=[numpy.get_include(), "/Users/anna", "/usr/local/include"]
+    include_dirs=[numpy.get_include(), "/Users/dtaylor", "/anaconda2","/usr/local/include"]
 )))
 print 'end'

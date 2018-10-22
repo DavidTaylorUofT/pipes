@@ -112,6 +112,7 @@ https://gist.github.com/GaelVaroquaux/1249305  (BDS license)'''
     # free(<void*>self.d_ptr)   # this line screws up, perhaps because example
     # C code had malloc,whereas mine uses new...??!?
 
+"""
 cdef extern from "<vector>" namespace "std":
     cdef cppclass vector[T]:
         cppclass iterator:
@@ -125,7 +126,8 @@ cdef extern from "<vector>" namespace "std":
         T & at(int)
         iterator begin()
         iterator end()
-
+#"""
+        
 cdef extern from "channel.h":
     cdef cppclass Cpreiss:
         Cpreiss(int, double, double, int, double)
@@ -201,8 +203,13 @@ cdef class PyPipe_ps:
     AofH(H,p): inverse of above
     Eta(A,p): hydrostatic pressure term in conservation law A\bar{p}/\rho
     pbar(A,p): average hydrostatic pressure
+    
+    DT: Location of function Definitions:
+    --------------
+    Cpreiss is imported from channel.h, a C++ header file; the substantial functions of this method are defined in channel.cpp
+        in channel.h it is clear that Cpreiss is a class that inherits from the 
     '''
-    cdef Cpreiss * thisptr
+    cdef Cpreiss * thisptr #DT: points to a  Preissman slot pipe
     cdef np.ndarray q  # np array of q data
     cdef np.ndarray q0  # np array of q data
     cdef int Nv  # number of variables per time step (=2*N)
@@ -379,6 +386,7 @@ cdef class PyNetwork:
     cdef np.ndarray Ns
     cdef np.ndarray Ls
     cdef np.ndarray Ds
+    cdef np.ndarray S0s
     cdef np.ndarray nodeTypes
     cdef int Nnodes, Nedges, M, Mi
     cdef double T
@@ -404,6 +412,8 @@ cdef class PyNetwork:
         self.nodeTypes = np.PyArray_SimpleNew(1, [< np.npy_intp > self.Nnodes], np.NPY_INTP)
         self.Ls = np.PyArray_SimpleNew(1, [< np.npy_intp > self.Nedges], np.NPY_DOUBLE)
         self.Ds = np.PyArray_SimpleNew(1, [< np.npy_intp > self.Nedges], np.NPY_DOUBLE)
+        self.S0s = np.PyArray_SimpleNew(1, [< np.npy_intp > self.Nedges], np.NPY_DOUBLE)
+
         NN = 0
         for i in range(Ne):
             self.conn[i][0] = self.thisptr.conns[2 * i]
@@ -411,6 +421,7 @@ cdef class PyNetwork:
             self.Ns[i] = self.thisptr.channels[i].N
             self.Ls[i] = self.thisptr.channels[i].L
             self.Ds[i] = self.thisptr.channels[i].w
+            self.S0s[i] = self.thisptr.channels[i].S0
             NN += self.thisptr.channels[i].N
         for i in range(self.Nnodes):
             self.nodeTypes[i] = self.thisptr.nodeTypes[i]
@@ -435,7 +446,7 @@ cdef class PyNetwork:
         return q
 
     def qhist(self, i):
-        '''array of history of states q = (A,Q). Laid out as [q_0, q_1,..q_M]
+        '''1D array of history of states q = (A,Q) in pipe i. Laid out as [q_0, q_1,..q_M]
            where q_n = [Aleft, A0, A1,,,A_N-1, Aright, Qleft, Q0,...Q_N-1,Qright] at time step n'''
         cdef np.ndarray qh
         cdef int Nn = (self.Ns[i] + 2) * 2 * (self.thisptr.M + 2)
@@ -499,9 +510,10 @@ cdef class PyNetwork:
         self.thisptr.channels[i].setq(A,Q)
 
     def showLayout(self):
-        print "   pipe | start node | end node\n" + "-" * 35
+        '''DT modified Oct'18 to show slope of pipes to help understand behaviour'''
+        print     "   pipe | start node | end node  | slope \n" + "-" * 35
         for i in range(self.Nedges):
-            print "     %d  |  %d         | %d" % (i, self.conn[i][0], self.conn[i][1])
+            print "     %d  |  %d         | %d         | %f" % (i, self.conn[i][0], self.conn[i][1],self.S0s[i]) #self.thisptr.channels[i].S0
         print "\n\n   node | #incoming pipes\n" + "-" * 25
         for i in range(self.Nnodes):
             print "  %d     |  %d" % (i, self.nodeTypes[i])
@@ -571,6 +583,8 @@ cdef class PyNetwork:
         def __get__(self): return self.Ds
     property Ls:
         def __get__(self): return self.Ls
+    property S0s:
+        def __get__(self): return self.S0s
     property Mrs:
         def __get__(self): return [self.thisptr.channels[k].Mr for k in range(self.Nedges)]
     property M:

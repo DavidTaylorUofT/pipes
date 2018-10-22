@@ -70,7 +70,7 @@ Network::Network(int Nnodes_, std::vector<int> conns_, int Nedges_, std::vector<
 	//initialize internal array of connectivity data 
 	for(int k = 0; k<Nedges*2; k++)
 	{
-		conns.push_back(conns_[k]);
+		conns.push_back(conns_[k]); //push_back is std c++ to append an array element, dealing with memory if req'd;
 	}
 	//figure out the type of each node (is it connected to 1, 2 or 3 pipes)
 	for (int k=0; k<2*Nedges; k++){nodeTypes.push_back(0.);}

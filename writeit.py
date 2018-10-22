@@ -178,7 +178,7 @@ def main():
     Mi = 50
     a = 100
     (fi, fc) = rewritePipes(fn, oldinp, Ns, Ls,
-                            Mrs, Ds, jt, bt, bv, r, h0s, q0s, T, M, a,elevs)
+                            Mrs, Ds, jt, bt, bv, r, h0s, q0s, T, M, Mi, a,elevs) #Mi added 9/11/18
     #print "fi = %s, fc = %s" % (fi, fc)
 
 if __name__ == "__main__":

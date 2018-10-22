@@ -107,7 +107,7 @@ void getCoeffSeries(vector< vector <Real> > & bvals, vector< vector <Real> > &x,
  * \param[in] M: number of simulaiton time steps
  * \param[in] Mi: number of time steps between writes to output files (1<=Mi<=M)
  * \param[in] T: total simulation time (s)
- * \param[in] T: which channel cross section to use. 0 for uniform, 1 for Preissman slot
+ * \param[in] channeltype_: which channel cross section to use. 0 for uniform, 1 for Preissman slot
  * */
 Network* setupNetwork(char *finp, char *fconfig, int &M, int &Mi, double &T, int channeltype_)
 {
