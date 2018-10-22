@@ -20,33 +20,10 @@
 
 import numpy as np
 
-def writePipes(fn,conns, xs,ys, Ns, Ls, Mrs, Ds, jt, bt, bv, r, h0s, q0s, T, M, a, elevs):
-    '''write .inp and .config files from scratch--be careful that the input parameter conns is actually a valid network structure!'''
-    #conns is an array of size Nx2; each row represents two junctions connecting a single edge
-    Np = np.shape(conns)[0]
-    Nn = len(jt)
-    #first write a fake .inp to get network connectivity
-    ftemp = '../indata/fakeinp.inp'
-    with open(ftemp, 'w') as ft:
-        ft.write('[TITLE]\n\n\n[JUNCTIONS]\n;ID              	Elev        	Demand      	Pattern\n')
-        for k in range(Nn):
-            ft.write("%d %15s %2.3f %15s0 %30s ;\n"%(k," ",elevs[k]," "," "))
-        ft.write('\n[PIPES]\n;ID              	Node1           	Node2           	Length      	Diameter    	Roughness   	MinorLoss   	Status\n')
-        for k in range(Np):
-            ft.write("%s %15s %s %15s %s %15s %4.1d %15s %2.2f %15s %1.4f\n" % \
-                                (k," ",conns[k,0]," ", conns[k,1]," ", Ls[k]," ", Ds[k]," ", Mrs[k]))
-        ft.write('\n[COORDINATES]\n;Node            	X-Coord         	Y-Coord\n')
-        for k in range(Nn):
-            ft.write('%d %15s  %.2f %15s %.2f\n'%(k,' ', xs[k], ' ', ys[k]))
-        print ftemp
-    (fi, fc) = rewritePipes(fn, ftemp, Ns, Ls, Mrs, Ds, jt, bt, bv, r, h0s, q0s, T, M, a, elevs)
-    return (fi, fc)
-
-def rewritePipes(fn, oldinp, Ns, Ls, Mrs, Ds, jt, bt, bv, r, h0s, q0s, T, M, a,elevs):
-    '''rewrite .inp and .config files for existing network configuration'''
+def rewritePipes(fn, oldinp, Ns, Ls, Mrs, Ds, jt, bt, bv, r, h0s, q0s, T, M, Mi, a,elevs):
     newconfig = fn + (".config")
     newinp = fn + ".inp"
-    Mi = 10
+#    Mi = 10
 # config file section titles
     Ptitle = "[PIPE_INFO]\n\
 ;-------------------------------------------\n\
@@ -66,18 +43,13 @@ def rewritePipes(fn, oldinp, Ns, Ls, Mrs, Ds, jt, bt, bv, r, h0s, q0s, T, M, a,e
     with open(newconfig, 'w') as fw:
         fw.write(Ptitle)
         for j in range(len(Ns)):
-            fw.write("%d    %d   %2.6f   %2.6f\n" %
+            fw.write("%d    %d   %2.5f   %2.3f\n" %
                      (j, int(Ns[j]), h0s[j], q0s[j]))
         fw.write("\n")
         fw.write(Jtitle)
         for k in range(len(jt)):
-            if jt[k]>1:
-                fw.write("%d     %d     %d     %d     %d     %d     %d     %d     %d     %d\n" % (
+            fw.write("%d     %d     %d     %d     %d     %d     %d     %d     %d     %d\n" % (
                 k, jt[k], bt[k], bv[k], r[k], 0, 1, 0, 0, 0))
-            else:
-                fw.write("%d     %d     %d     %.4f     %d     %d     %d     %d     %d     %d\n" % (
-                k, jt[k], bt[k], bv[k], r[k], 0, 1, 0, 0, 0))
-
         fw.write("\n")
         fw.write(Ttitle)
         fw.write("%3.3f       %d         %d        %.1f" % (T, M, Mi, a))
@@ -99,9 +71,12 @@ def rewritePipes(fn, oldinp, Ns, Ls, Mrs, Ds, jt, bt, bv, r, h0s, q0s, T, M, a,e
                     count1 +=1
                     if count1>=len(jt):
                         count+=1
-                elif (count == 6) and len(s) > 1 and (';' not in s[0]):
-                    fnew.write("%s %15s %s %15s %s %15s %4.1d %15s %2.2f %15s %1.4f\n" % \
-                                (s[0]," ",s[1]," ", s[2]," ", Ls[count2]," ", Ds[count2]," ", Mrs[count2]))
+                #elif (count == 6) and len(s) > 1 and (';' not in s[0]):
+		# revise as following:
+		elif (count < 6) and len(s) > 1 and (';' not in s[0]):
+                    #print 'yes'
+                    fnew.write("%s %23s %s %23s %s %17s %4.1d %10s %2.2f %10s %1.4f %10s 0 %12s open\n" % \
+                                (s[0]," ",s[1]," ", s[2]," ", Ls[count2]," ", Ds[count2]," ", Mrs[count2],"",""))
                     count2 += 1
                     if count2 >= len(Ns):
                         count += 1

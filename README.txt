@@ -1,3 +1,49 @@
+*******************************************************************************************************
+******************************************************************************************************
+Notes updated by Xin:
+Author: Xin Zhang
+Date: June 11st, 2017
+
+You should read Anna's notes first and get familair with the process. 
+/home/xin/pipes/indata/Xindata/cleanupinpfiles.py is not used to build the .inp and .config file when you have T junctions in the network (explained later) 
+Before you get your hands dirty, I would suggest you to check the following information.
+
+The installation may not be as easy as Anna said from my personal experinece. 
+If you cannot succeed, I can send you the ubuntu package opened in VMware workstation per request. 
+You find the \Home\pipes containing all the source code. And if you want to run it, just open the terminal and run "ipython notebook"
+I have already put all the prior commands in the bash to automatically run it.
+
+I did not use Anna's method to produce movie. Instead, I use python code to do it myself.
+These code can be found in /examples/DelhiTrunkMain*.ipynb (* means something)
+You may choose either one you like.
+
+The following content contains some information about my revised algorithm. You also check my thesis for more information.
+
+0) The main updated algorithm is located in channel.cpp file (inclduing all I have quoted in the thesis). Some notes are mentioned here:
+
+1) The names of some variables in chanel.cpp maybe different from what I described in the thesis, but the algorithm should be the same
+
+2) For the T junction algorithm, PAY ATTENTION: 
+       channel 0 must be inflow and right connected, channel 1 must be horizontal, channel 2 must be vertical
+       Both 1 and 2 should be left connected, These should be careful when establish the model
+       This routine is only designed for T junction
+   This means that the "/home/xin/pipes/indata/Xindata/cleanupinpfiles.py" does not work in pipe networks with T junctions.
+   Currently you will need to manually assign index to those pipes (that is .inp file needs to be created manually)
+   I have not find good ways to make this automatic.
+   
+   In Tjunction_Aboundary.ipynb, I have the code to write .config file automatically with known .inp file. You may check that.
+
+3) For the T junction algorithm, I also have developed an algorithm to consider that channel 2 is right connected (for H network). However, this 
+   part is not fully tested. You maybe careful if you want to use it.
+
+4) My email address is zhangx1994@hotmai.com. If you have further questions, you can contact me for more details.
+
+*************************************************************************************************************************
+****************************************************************************************************************************
+Oringial Instruction
+Author: Anna Lieb
+Date: 2015
+
 Howdy there!
 
 This is still very much in development, so please accept my apologies if
@@ -278,5 +324,11 @@ quick time movies with qt_tools
 
 or with ffmpeg:
 	ffmpeg -f image2 -i tmp_%03d.png -vcodec libx264 -b 2400k output-filename.mp4
+
+
+
+
+
+
 
 

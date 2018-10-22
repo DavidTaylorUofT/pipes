@@ -65,7 +65,7 @@ Network::Network(int Nnodes_, std::vector<int> conns_, int Nedges_, std::vector<
 	        Nnodes(Nnodes_), Nedges(Nedges_), M(M_), channeltype(channeltype_)
 {
 	
-	//start with time =0	
+	//start with time =0	network
 	nn = 0; 
 	//initialize internal array of connectivity data 
 	for(int k = 0; k<Nedges*2; k++)
@@ -81,7 +81,7 @@ Network::Network(int Nnodes_, std::vector<int> conns_, int Nedges_, std::vector<
 	//fill channels with data from Ns, ws, Ls, etc
 	for(int i = 0; i<Nedges; i++)
 	{	
-		if(channeltype==0){channels.push_back(new Cuniform(Ns[i], ws[i], Ls[i],M,a));}
+		if(channeltype==0){cout<<"Uniform"<<endl;}//channels.push_back(new Cuniform(Ns[i], ws[i], Ls[i],M,a));}
 		else{channels.push_back(new Cpreiss(Ns[i], ws[i], Ls[i],M,a));}
 		channels[i]->setq(a0s[i],q0s[i]);
 		channels[i]->setq0(a0s[i], q0s[i]);
@@ -96,7 +96,7 @@ Network::Network(int Nnodes_, std::vector<int> conns_, int Nedges_, std::vector<
 	//	printf("node %d gets a junction%d\n", j,nodeTypes[j]);
 		if(nodeTypes[j] ==1)
 		{
-			int idx =find_nth(conns, j, 1, 2*Nedges);
+			int idx =find_nth(conns, j, 1, 2*Nedges);   //In conns, find the location of 1st node j
 	//		printf(" index is %d, row is %d, column is %d\n", idx, idx/2, idx%2);
 			printf("\njunction1!!!\n edge is %d and whichend is %d\n ", idx/2, idx%2); 
 		        junction1s.push_back(new Junction1(*channels[idx/2], idx%2 ,0.,1)); //row in conns corresponds to edge; column corresponds to left or right end.
@@ -105,7 +105,7 @@ Network::Network(int Nnodes_, std::vector<int> conns_, int Nedges_, std::vector<
 		{
 			int idx1 =find_nth(conns, j, 1, 2*Nedges);
 			int idx2 =find_nth(conns, j, 2, 2*Nedges);
-			printf("\njunction2!!! edge0 is %d, which0 is edge 1 is %d, which1 is %d %d\n", idx1/2, idx1/2, idx1%2, idx2/2, idx2%2);
+			printf("\njunction2!!! edge0 is %d, which0 is %d, edge 1 is %d, which1 is %d\n", idx1/2, idx1%2, idx2/2, idx2%2);
 		//	printf(" index2 is %d, edge1 is %d, which1 is %d\n", idx2, idx2/2, idx2%2);
 			junction2s.push_back(new Junction2(*channels[idx1/2], *channels[idx2/2], idx1%2, idx2%2, 1.0));
 		}
@@ -115,10 +115,16 @@ Network::Network(int Nnodes_, std::vector<int> conns_, int Nedges_, std::vector<
 			int idx1 =find_nth(conns, j, 1, 2*Nedges);
 			int idx2 =find_nth(conns, j, 2, 2*Nedges);
 			int idx3 =find_nth(conns, j, 3, 2*Nedges);
-			printf("\njunction3!!!\n index1 is %d, row is %d, column is %d\n", idx1, idx1/2, idx1%2);
-			printf(" index2 is %d, row is %d, column is %d\n", idx2, idx2/2, idx2%2);	
-			printf(" index3 is %d, row is %d, column is %d\n", idx3, idx3/2, idx3%2);
+			//printf("\njunction3!!!\n index1 is %d, row is %d, column is %d\n", idx1, idx1/2, idx1%2);
+			//printf(" index2 is %d, row is %d, column is %d\n", idx2, idx2/2, idx2%2);	
+			//printf(" index3 is %d, row is %d, column is %d\n", idx3, idx3/2, idx3%2);
 			//set it up so that either you have [end0, end1, end2] = [1,0,0] or = [0,1,1];
+
+
+			junction3s.push_back(new Junction3(*channels[idx1/2], *channels[idx2/2], *channels[idx3/2], idx1%2, idx2%2, idx3%2));
+			printf("(A) ch0 is %d ch1 is %d ch2 is %d", idx1/2, idx2/2, idx3/2 );
+			printf("whichends are [%d %d %d]\n", idx1%2, idx2%2, idx3%2 );
+/*
 			//[0,1,1] case
 			if(idx1%2+idx2%2+idx3%2 ==2){
 				if (idx1%2 == 0){junction3s.push_back(new Junction3(*channels[idx1/2], *channels[idx2/2], *channels[idx3/2], idx1%2, idx2%2, idx3%2));
@@ -154,7 +160,7 @@ Network::Network(int Nnodes_, std::vector<int> conns_, int Nedges_, std::vector<
 				cout<<"Ruh-roh, boundary conditions not implemented for this configuration yet. Your simulation is fairly certainily going to suck.\n";
 			}
 			
-			
+*/			
 		}			
 		else {printf("Well, then I have no idea. Too many nodes!  (nodetypes[j] = %d)\n", nodeTypes[j]);
 			for (int k = 0; k<Nedges; k++)cout<<conns[2*k]<<" "<<conns[2*k+1]<<endl;
@@ -176,7 +182,7 @@ Network::Network(const Network &N_old):Nnodes(N_old.Nnodes), Nedges(N_old.Nedges
 	for(int i = 0; i<Nedges; i++)
 	{	
 		int Ni = N_old.channels[i]->N;
-		if(N_old.channeltype ==0){channels.push_back(new Cuniform(Ni, N_old.channels[i]->w, N_old.channels[i]->L,M,a));}
+		if(N_old.channeltype ==0){cout<<"Uniform"<<endl;}//channels.push_back(new Cuniform(Ni, N_old.channels[i]->w, N_old.channels[i]->L,M,a));}
 		else{channels.push_back(new Cpreiss(Ni, N_old.channels[i]->w, N_old.channels[i]->L,M,a));}
 		for(int k=0; k<2*Ni; k++){
 			channels[i]->q[k] = N_old.channels[i]->q[k];
@@ -212,13 +218,13 @@ Network::Network(const Network &N_old):Nnodes(N_old.Nnodes), Nedges(N_old.Nedges
 			//[0,1,1] case
 			if(idx1%2+idx2%2+idx3%2 ==2){
 				if (idx1%2 == 0){junction3s.push_back(new Junction3(*channels[idx1/2], *channels[idx2/2], *channels[idx3/2], idx1%2, idx2%2, idx3%2));
-			//	   printf("junction3! incoming channels= [%d %d %d]\n",idx1/2, idx2/2, idx3/2);
+				   printf("junction3! incoming channels= [%d %d %d]\n",idx1/2, idx2/2, idx3/2);
                 }
 				else if(idx2%2 == 0){junction3s.push_back(new Junction3(*channels[idx2/2], *channels[idx1/2], *channels[idx3/2], idx2%2, idx1%2, idx3%2));
-			//	   printf("junction3! incoming channels= [%d %d %d]\n",idx2/2, idx1/2, idx3/2);
+				   printf("junction3! incoming channels= [%d %d %d]\n",idx2/2, idx1/2, idx3/2);
                 }
 				else {junction3s.push_back(new Junction3(*channels[idx3/2], *channels[idx2/2], *channels[idx1/2], idx3%2, idx2%2, idx1%2));
-				//printf("junction3! incoming channels= [%d %d %d]\n",idx3/2, idx2/2, idx1/2);
+				printf("junction3! incoming channels= [%d %d %d]\n",idx3/2, idx2/2, idx1/2);
 
                 }
 
@@ -226,14 +232,14 @@ Network::Network(const Network &N_old):Nnodes(N_old.Nnodes), Nedges(N_old.Nedges
 			//[1,0,0] case
 			else if(idx1%2+idx2%2+idx3%2 ==1){
 				if(idx1%2 ==1){junction3s.push_back(new Junction3(*channels[idx1/2], *channels[idx2/2], *channels[idx3/2], idx1%2, idx2%2, idx3%2));
-			//					   printf("junction3! incoming channels= [%d %d %d]\n",idx1/2, idx2/2, idx3/2);
+								   printf("junction3! incoming channels= [%d %d %d]\n",idx1/2, idx2/2, idx3/2);
                 }
 				else if(idx2%2 ==1){junction3s.push_back(new Junction3(*channels[idx2/2], *channels[idx1/2], *channels[idx3/2], idx2%2, idx1%2, idx3%2));
-			//			   printf("junction3! incoming channels= [%d %d %d]\n",idx2/2, idx1/2, idx3/2);
+						   printf("junction3! incoming channels= [%d %d %d]\n",idx2/2, idx1/2, idx3/2);
 
                 }
 				else {junction3s.push_back(new Junction3(*channels[idx3/2], *channels[idx2/2], *channels[idx1/2], idx3%2, idx2%2, idx1%2));
-              //      		printf("junction3! incoming channels= [%d %d %d]\n",idx3/2, idx2/2, idx1/2);
+                    		printf("junction3! incoming channels= [%d %d %d]\n",idx3/2, idx2/2, idx1/2);
 				}
 			}
 			else {
@@ -285,7 +291,7 @@ Network::Network(Network *N_old):Nnodes(N_old->Nnodes), Nedges(N_old->Nedges), M
 	for(int i = 0; i<Nedges; i++)
 	{	
 		int Ni = N_old->channels[i]->N;
-		if(N_old->channeltype ==0){channels.push_back(new Cuniform(Ni, N_old->channels[i]->w, N_old->channels[i]->L,M,a));}
+		if(N_old->channeltype ==0){cout<<"Uniform"<<endl;}//channels.push_back(new Cuniform(Ni, N_old->channels[i]->w, N_old->channels[i]->L,M,a));}
 		else{channels.push_back(new Cpreiss(Ni, N_old->channels[i]->w, N_old->channels[i]->L,M,a));}
 		for(int k=0; k<2*Ni; k++){
 			channels[i]->q[k] = N_old->channels[i]->q[k];
@@ -402,7 +408,7 @@ void Network::EulerStep(double dt)
 //#pragma omp parallel for  (not worth initializing threads for networks with 1-17 pipes...haven't tested larger networks.
 	for (int k = 0;k<Nedges; k++)
 	{
-         //printf("Channel %d!!!!!!!!!!!!\n",k);
+        // printf("Channel %d!!!!!!!!!!!!\n",k);
 		int trouble = channels[k]->stepEuler(dt);
         
         double dtmin= 1e-7; //don't take time steps smaller than this
@@ -410,7 +416,7 @@ void Network::EulerStep(double dt)
 
         int count = 0;
         int Mfake=1;
-      /*  while (trouble !=0 &&dtfake>dtmin && count<10) //if negative cross sectional area problem, stepEuler returns 1 or 2
+        while (trouble !=0 &&dtfake>dtmin && count<10) //if negative cross sectional area problem, stepEuler returns 1 or 2
         {
             count +=1;
             dtfake = dtfake/2.;
@@ -421,9 +427,9 @@ void Network::EulerStep(double dt)
             {
                 trouble = channels[k]->stepEuler(dtfake);
             }
-        }*/
-        if(trouble !=0) printf("trouble = %d in pipe %d\n",trouble,k);
-/*        {
+        }
+       /* if(trouble !=0)
+        {
            for (int l = 0; l<channels[k]->N; l++)
            {
                if(channels[k]->q[l]<0)
@@ -433,6 +439,7 @@ void Network::EulerStep(double dt)
                        channels[k]->q0[l]=0.;
            }}
         }*/
+        //printf("trouble = %d\n",trouble);
 
    }
 }
@@ -449,13 +456,17 @@ void Network::stepRK3_SSP(double dt)
 			channels[j]->Clhat[i] = channels[j]->Cl0[i];
         }
 	}
+	/*
 	EulerStep(dt);
 	EulerStep(dt);
+	*/
 	for(int j=0; j<Nedges; j++)
 	{
 		channels[j]->n++;
+		// Third-order R-K code in this for loop
 		for(int i = 0; i<channels[j]->N; i++)
 		{
+			// printf("Grid %d of channel %d!!!!!!!!!!!!\n",i,j);
 			for (int k=0; k<2; k++)
 			{
 				channels[j]->q[channels[j]->idx(k,i)] = 0.75*channels[j]->qhat[channels[j]->idx(k,i)] 
@@ -473,8 +484,8 @@ void Network::stepRK3_SSP(double dt)
 		{
 			for (int k=0; k<2; k++)
 			{
-				channels[j]->q[channels[j]->idx(k,i)] = 1./3.*channels[j]->qhat[channels[j]->idx(k,i)]
-				       	+2./3.*channels[j]->q[channels[j]->idx(k,i)];
+				//channels[j]->q[channels[j]->idx(k,i)] = 1./3.*channels[j]->qhat[channels[j]->idx(k,i)]
+				//       	+2./3.*channels[j]->q[channels[j]->idx(k,i)];
 				channels[j]->q0[channels[j]->idx(k,i)] = channels[j]->q[channels[j]->idx(k,i)];
 				channels[j]->q_hist[channels[j]->idx_t(k,i+1,nn)] = channels[j]->q[channels[j]->idx(k,i)];
 			}
@@ -507,6 +518,7 @@ int Network::runForwardProblem(double dt)
 			printf("<dH/dx> is %f \n", getAveGradH(i));	
 		}
 	#endif
+		// printf("\n \n Now the time step is %d (range from 1~M)!! \n",i+1);
 		nn ++;
 		stepRK3_SSP(dt);
     }

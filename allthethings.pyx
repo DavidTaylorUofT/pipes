@@ -48,7 +48,7 @@ cdef extern from "time.h":
 #Don't actually need these, I think! (12/2/2015)
 # if on macbook air
 #sys.path.append('/Users/anna/anaconda/lib/python2.7/site-packages')
-sys.path.append('/usr/local/Cellar/gcc49/4.9.2_1/lib/gcc/4.9/gcc/x86_64-apple-darwin12.6.0/4.9.2/include-fixed')
+#sys.path.append('/usr/local/Cellar/gcc49/4.9.2_1/lib/gcc/4.9/gcc/x86_64-apple-darwin12.6.0/4.9.2/include-fixed')
 #if on linux vm
 #sys.path.append('/home/USERNAME/anaconda/lib/python2.7/site-packages')
 # print sys.path
@@ -127,8 +127,6 @@ cdef extern from "<vector>" namespace "std":
         iterator end()
 
 cdef extern from "channel.h":
-    cdef bool linAstar
-    cdef bool L2yes
     cdef cppclass Cpreiss:
         Cpreiss(int, double, double, int, double)
         int channeltype, N, M, n
@@ -163,10 +161,6 @@ cdef extern from "channel.h":
         Junction2(Cpreiss, Cpreiss, int, int ,double) 
         double valveopen
         void setValveTimes(vector[Real])
-
-linAstar_flag =linAstar
-L2yes_flag=L2yes
-
 cdef class PyPipe_ps:
     '''	
     Input Parameters:
@@ -469,13 +463,13 @@ cdef class PyNetwork:
             print "pipe index %d out of bounds for network with %d pipes"%(i,self.Nedges)
         else:
             N = self.thisptr.channels[i].N
-            if k>N or k<0:
+            if k>N or k<-1:
                 warning = 1
                 print "index k = % out of bounds for channel %d with %d cells "%(k,i,N)
         if warning==0:
             M = self.thisptr.M
             pvals = np.zeros(M+1)
-            for n in range(M+1):
+            for n in xrange(M+1):
                 pvals[n] =self.thisptr.channels[i].pbar(self.thisptr.channels[i].q_hist[self.idx_t(0,k+1,n,i)],False) 
         return pvals
     def pressureSpaceSeries(self,i,n):
@@ -491,7 +485,7 @@ cdef class PyNetwork:
         if warning==0:
             N = self.thisptr.channels[i].N
             pvals = np.zeros(N)
-            for k in range(N):
+            for k in xrange(N):
                 pvals[k] =self.thisptr.channels[i].pbar(self.thisptr.channels[i].q_hist[self.idx_t(0,k+1,n,i)],False) 
         return pvals
         
@@ -628,7 +622,7 @@ cdef class PyNetwork:
     def idx_t(self, i, j, n, k):
         '''index of ith variable (i=0 or 1) at x location j at time step n in pipe k'''
         N = self.thisptr.channels[k].N
-        return (2 * (N + 2) * n + (N + 2) * i + j)
+        return (2 * (N + 2) * n + (N + 2) * i + j)  
     def reset(self):
         self.thisptr.nn=0
         for k in range(self.Nedges):
@@ -805,7 +799,6 @@ cdef class PyBC_opt_dh:
     cdef int ndof
     cdef double solve_t  # CPU solve time
     cdef double wsolve_t  # actual solve time
-
 
     def __cinit__(self, char * fi, char * fc, int ndof, np.ndarray x0, int whichnode, double Vin, int modetype):
         cdef int M = 1, Mi = 1, skip = 1

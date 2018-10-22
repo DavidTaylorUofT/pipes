@@ -1,0 +1,21 @@
+[TITLE]
+
+[JUNCTIONS]
+;ID              	Elev        	Demand      	Pattern
+ 0               	0.00         	0           	                	;
+ 1               	0.00         	0           	                	;
+ 2               	0.00         	0           	                	;
+ 3               	0.00         	0           	                	;
+
+[PIPES]
+;ID              	Node1           	Node2           	Length      	Diameter    	Roughness   	MinorLoss   	Status
+ 0               	  2               	  0               	5.00     	 1.100           0.015         	   0           	 Open  	;
+ 1               	  0               	  3               	5.00     	 1.100           0.015         	   0           	 Open  	;
+ 2               	  0               	  1               	5.00     	 0.800           0.015         	   0           	 Open  	;
+
+[COORDINATES]
+;Node            	X-Coord         	Y-Coord
+ 0              	41.42              	50.00   
+ 1              	100.00              	50.00   
+ 2              	 0.00              	100.00   
+ 3              	 0.00              	 0.00   

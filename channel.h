@@ -33,11 +33,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <iostream>
+#include <fstream>
 #include <math.h>
 #include <time.h>
 #include "globals.h"
 #include <stdexcept>
 #include <valarray>
+#include <typeinfo>
+
 
 #include "real_def.h"
 #include "ridders.h"
@@ -47,6 +50,7 @@
 #include "chebyshevlite.h"
 
 
+
 using std::max;
 using std::min;
 
@@ -54,10 +58,7 @@ using std::min;
 #define WTF false
 /*\def flag for tracking chlorine (for water quality sim in development). Set to false to not bother*/
 #define Clplease false
-/*\def flag for using L2 objective function in optimization. Set to false for version in paper*/
-#define L2yes true
-/*\def flag for using linear estimate for Astar. if this flag is false, (ostensibly) depth-positivity preserving condition is used*/
-#define linAstar true
+
 
 /*
  * \def horrifying macros for numerical flux routines
@@ -111,7 +112,6 @@ double AofPhi (double phi, double D, double At, double Ts, bool P);
 double Cgrav  (double A, double D, double At, double Ts, bool P);
 /**\eta=A pbar/rho, where pbar is the depth-averaged hydrostatic pressure and rho is the density(Preissman slot geometry)*/ 
 double Eta    (double A, double D, double At, double Ts, bool P);
-
 //I'm keeping these for the time being so I can compare other people's power series with ours
 //inline double getTheta(double A, double D);
 //inline double powPhi(double t, double D);
@@ -125,6 +125,8 @@ class Channel
 
 	public:
 	//Background info	
+		/**My parameter: old alpha used to calculate junction 3 area*/
+		double old_alpha = 0.5;
 		/** Channel cross section type. Current choices are 0 (uniform) and 1 (Preissman slot)*/
 		int channeltype;                           
 	//Basic geometry
@@ -164,7 +166,7 @@ class Channel
 	    double *qhat;          
 		/** History of states q_hist laid out as [q(t=0), q(t=dt), ....q(t=dt*(M/Mi-1))] 
 		 * where each q(t) is a row vector arranged as above.*/
-		double *q_hist;           	 		  			
+		double *q_hist;        	 		  			
         /**concentration of chlorine we're tracking (not to be confused with c, a wavespeed)*/
 		double *Cl, *Cl0, *Clhat;  
         /** history of chlorine concentration*/
@@ -210,11 +212,14 @@ class Channel
         /** Take an Euler step */
 		int stepEuler(double dt);
 		/** Compute numerical HLL flux (requires the function speeds to be defined)*/
-		void numFluxHLL(double q1m, double q1p, double q2m, double q2p, double *flux, bool Pm, bool Pp);      
+		void numFluxHLL(double q1m, double q1p, double q2m, double q2p, double *flux, bool Pm, bool Pp); 
+		void numFluxHLL1(double q1m, double q1p, double q2m, double q2p, double *flux, bool Pm, bool Pp, double Qy);       
+		void numFluxHLL_K(double q1m, double q1p, double q2m, double q2p, double *flux, bool Pm, bool Pp, int loc);  
 		/** Physical flux (i.e. the actual conservation law flux)*/
 		void physFlux(double q1, double q2, double *flux, bool P);
 		/**HLL speeds--defined for given cross sectional geometry in derived class*/
 		virtual void speedsHLL(double q1m, double q1p, double q2m, double q2p, double *s, bool Pm, bool Pp)=0;
+		virtual void speedsHLL_K(double q1m, double q1p, double q2m, double q2p, double *s, bool Pm, bool Pp, int loc)=0;
 		/**Roe speeds--defined for given cross sectional geometry in derived class*/
 		virtual void speedsRoe(double q1m, double q1p, double q2m, double q2p, double *s, bool Pm, bool Pp)=0;
 	//Functions specific to cross-sectional geometry, definitions in the derived class*/
@@ -244,6 +249,8 @@ class Channel
 		void stepSourceTerms(double dt);
 		/** Evaluate source terms for given A and Q */
 		double getSourceTerms(double A, double Q); 
+		/**My code: Only calculate friction Sf**/
+		double getFriction(double A, double Q);
 		/**update chlorine terms*/
         void stepTransportTerms(double dt);
         /** Get the volume of water in the pipe*/		
@@ -272,6 +279,11 @@ class Channel
 		double min3(double a, double b, double c);
 		/** max of three numbers*/
 		double max3(double a, double b, double c);
+
+
+		/*My code*/
+		void SandersUpdateQ(double dt, int i); // Dec 3rd, 2016. From Sanders et al. (2011)
+
 };
 
 
@@ -322,6 +334,9 @@ class Cpreiss: public Channel{
 		double Eta(double A, bool p);
 		double HofA(double A,bool p){return ::HofA(A, D, At, Ts, p);}
 		double pbar(double A, bool p){return (A>0? Eta(A,p)/(G*A)  : 0.);}
+		//**************  My own algorithm, added on 10/03/2016 *************
+		//double Aofpbar(double A, bool p);    
+		//**************  My own algorithm, added on 10/03/2016 *************
 	    double hofAold(double A);	
 		double fakehofA(double A, bool p);
 		double fakeAofh(double h, bool p);
@@ -334,7 +349,11 @@ class Cpreiss: public Channel{
 		double PhiofA(double A,bool p){return ::PhiofA(A, D, At, Ts, p);}
 		double AofPhi(double phi,bool p){return ::AofPhi(phi, D, At, Ts, p);}
 		void speedsHLL(double q1m, double q1p, double q2m, double q2p, double *s, bool Pm, bool Pp);
+		void speedsHLL_K(double q1m, double q1p, double q2m, double q2p, double *s, bool Pm, bool Pp, int loc);
 		void speedsRoe(double q1m, double q1p, double q2m, double q2p, double *s, bool Pm, bool Pp);
+
+		double two_rarefaction_func(double uL, double uR, double AL, double AR,  double Astar);
+		double two_rarefaction_iter(double uL, double uR, double AL, double AR,  double low, double low_error, double high, double high_error);
 };
 
 ///////
@@ -413,6 +432,7 @@ class Junction2
 		void setValveTimes(vector<Real>x);
 		/**assign boundary fluxes to last cell of ch0 and first cell of ch1*/
 		void boundaryFluxes(double dt); 
+
 };
 
 /**\brief Class for applying boundary conditions at a junction where 3 channels come together and !&^# gets real*/
@@ -431,6 +451,20 @@ class Junction3
 		/**assign all the bloody boundary fluxes according to some voodoo magic	*/
 		void boundaryFluxes(double dt); 
 
+		
+		/**Currently applied my code**/
+		double recursefind2(double low, double low_error, double high, double high_error, double H);
+		double recursefind1(double low, double low_error, double high, double high_error, double H);
+		double Aofpbar2(double A);
+		double Aofpbar1(double A);
+		double recursefind(Channel &target_pipe, double low, double low_error, double high, double high_error, double H);
+		double Aofpbar(double A, Channel &ini_pipe, Channel &target_pipe);
+		double getAstar(Channel &pipe, int loc);
+
+		// I am currently using this to replae Aofpbar series
+		double recurseJunAtransfer(double flow_dir, Channel &pipe0, double v0, Channel &pipe1, double low, double low_error, 
+			double high, double high_error, double A_to_transfer, double X);
+		double JunAtransfer(double flow_dir, Channel &pipe0, double v0, Channel &pipe1, double A_to_transfer);
 };
 
 

@@ -76,6 +76,9 @@ const double pA1 = 1./3.;
 const double pA2 = 5./12.;
 const double pPhi1 = 1.;
 const double pPhi2 = 3./5.;
+/*\define a minimum water cross section requirement for updating algorithm*/
+const double A_area_critical = 1e-8;   
+
 
 /**
  * Height as a function of cross sectional area
@@ -208,7 +211,7 @@ double Cgrav(double A, double D, double At, double Ts, bool P)
 }
 
 /**
- * \eta = g*\int_0^{h(A)}((h(A)-z)l(z)) dz  = ghA - g\bar{y}
+ * \eta = g*\int_0^{h(A)}((h(A)-z)l(z)) dz  = ghA - gA\bar{y}
  * where g =9.8 m/s^2 is acceleration due to gravity
  * \bar{y} is the centroid of the flow, \bar{y} = (\int_0^h(A) zl(z) dz)/A 
  * note that
@@ -235,12 +238,12 @@ double Eta(double A, double D, double At, double Ts, bool P)
 	{
 		double H = (A-(PI*D*D/4.))/Ts;
 		H = (A-At)/Ts;
-		//Eta = PI/4.*G*D*D*(H+D/2.);
-        //compare with ``true'' preissman approach from integrating
-		Eta = PI/4.*G*D*D*(H+D/2.)+Ts/2.*H*H*G;
+		Eta = PI/4.*G*D*D*(H+D/2.);
 	}
 	return Eta;
 }
+
+
 
 
 /**
@@ -274,7 +277,7 @@ Channel::Channel(int Nin, double win, double Lin, int Min, double a, double kwin
 	P.push_back(false);
 	n = 0;
 	//Array q_hist is allocated if there's less than 10 million stored variables, else complain and quit
-	if(N*M<2e7){
+	if(N*M<2e9){           //********************Initially, here is 2e7, I changed to 2e9 on 09/30/2016
 		q_hist = new double[2*(N+2)*(M+2)]; 
 		p_hist = new bool[2*(N+2)*(M+2)];
         Cl_hist = new double[(N+2)*(M+2)];
@@ -287,7 +290,7 @@ Channel::Channel(int Nin, double win, double Lin, int Min, double a, double kwin
             p_hist[k] = 0.;
             q_hist[k] = 0.;
         }
-
+        
 	}
 	else 
 	{
@@ -520,11 +523,15 @@ void Channel::setCl0(vector<double> Cl0_)
  **/
 int Channel::stepEuler(double dt)
 {
-    int retval = 0;
 	cmax = 0.;  //reset CFL;
 	double fplus[2] ={0};
 	double fminus[2] ={0};
-	double nu = dt/dx;				
+	double nu = dt/dx;	
+
+	// Modified on Nov 19, 2016, set A_base value and Q_base value for dry pipe	
+	double A_base = A_area_critical; 	
+
+
 	//decide when negative A forces the code throws an error over negative area (vs. just printing a warning) 
 	double negtol = -dx/100.;		
 	int i,k;
@@ -532,10 +539,34 @@ int Channel::stepEuler(double dt)
 	Pnow = P[pj(0)]; 							              
 	//update leftmost cell using externally assigned fluxes bfluxleft
 	//printf("bfluxleft = [%f,%f]\n",bfluxleft[0], bfluxleft[1]);
-//	printf("bfluxright = [%f,%f]\n",bfluxright[0], bfluxright[1]);
-    numFlux(q0[idx(0,0)], q0[idx(0,1)], q0[idx(1,0)], q0[idx(1,1)],fplus,P[pj(0)], P[pj(1)]);
-	q[idx(0,0)] = q0[idx(0,0)]-nu*(fplus[0]-bfluxleft[0]);           
-	q[idx(1,0)] = q0[idx(1,0)]-nu*(fplus[1]-bfluxleft[1]);	
+	//printf("bfluxright = [%f,%f]\n",bfluxright[0], bfluxright[1]);f
+
+    //Previously
+    //numFlux(q0[idx(0,0)], q0[idx(0,1)], q0[idx(1,0)], q0[idx(1,1)],fplus,P[pj(0)], P[pj(1)]);
+    //Karney now
+    numFluxHLL_K(q0[idx(0,0)], q0[idx(0,1)], q0[idx(1,0)], q0[idx(1,1)],fplus,P[pj(0)], P[pj(1)],0);
+
+	q[idx(0,0)] = q0[idx(0,0)]-nu*(fplus[0]-bfluxleft[0]);
+	q[idx(1,0)] = q0[idx(1,0)]-nu*(fplus[1]-bfluxleft[1]);
+
+	if(q[idx(0,0)] < A_base){
+		cout << "Too small area at the first grid:"<<q[idx(0,0)]<<endl;
+		cout << "the in numerical flux of the first grid:"<<bfluxleft[0]<<", "<<bfluxleft[1]<<endl;
+		cout << "the out numerical flux of the first grid:"<<fplus[0]<<", "<<fplus[1]<<endl;
+		// q[idx(0,0)] = A_base;
+
+		q[idx(0,0)] = max(q[idx(0,1)], A_base);
+		if (q[idx(1,0)] > 0){
+        	q[idx(1,0)] = min(q[idx(1,0)],q[idx(1,1)]);
+        }
+        else{  //consider the inverse flow
+        	q[idx(1,0)] = max(q[idx(1,0)],q[idx(1,1)]);
+        }
+        cout<<"The diameter of the pipe is:"<<w<<endl;
+		printf("enforce grid 0 of %i to be (A,Q) =(%.12f,%.12f) \n", N, q[idx(0,0)],q[idx(1,0)]);
+	}
+
+	
 	P[pj(0)] = (q[idx(0,0)]>At )||( P[pj(-1)]==true && P[pj(1)]==true); 
 	for(i = 1; i<N-1; i++)
 	{
@@ -544,60 +575,82 @@ int Channel::stepEuler(double dt)
 		fminus[1] = fplus[1];                                                       
 		Pnow = P[pj(i)];		
 		// + fluxes need to be computed afresh
-		numFlux(q0[idx(0,i)], q0[idx(0,i+1)], q0[idx(1,i)], q0[idx(1,i+1)],fplus, P[pj(i)], P[pj(i+1)]);                    
+
+		// Prevously
+		// numFlux(q0[idx(0,i)], q0[idx(0,i+1)], q0[idx(1,i)], q0[idx(1,i+1)],fplus, P[pj(i)], P[pj(i+1)]);  
+		// Karney Modified
+		numFluxHLL_K(q0[idx(0,i)], q0[idx(0,i+1)], q0[idx(1,i)], q0[idx(1,i+1)],fplus, P[pj(i)], P[pj(i+1)],i);   
+		
 		// update conservation law
 		for(k=0; k<2; k++)
 		{
 			q[idx(k,i)] = q0[idx(k,i)]-nu*(fplus[k]-fminus[k]);
 		}
-        if(q[idx(0,i)]<0)
-        {
-            
-            printf("Negative area! i=%d, A= %f, Q= %f, fplus= [%f,%f] and fminus = [%f %f]\n",i,q[i], q[idx(1,i)], fplus[0],fplus[1], fminus[0],fminus[1]);
-		//	printf("%d    %.16f   %.16f\n",-1, q_hist[idx_t(0,0,n)], q_hist[idx_t(1,0,n)]);  
-        //    for (int i=0; i<N; i++)
-         //   {
-          //      printf("%d    %.16f   %.16f  %.16f   %.16f\n",i, q0[idx(0,i)], q0[idx(1,i)],q[idx(0,i)], q[idx(1,i)]);  
-           // }
-		//	printf("%d    %.16f   %.16f\n",N, q_hist[idx_t(0,N+1,n)], q_hist[idx_t(1,N+1,n)]);  
-          //  if (q[idx(0,i)]<negtol) q[idx(0,i)]=0.;
-            retval= 1;
-            //std::runtime_error("Oh damn. Negative area!\n");
+		// printf("At grid %d of %d, the fplus is %.8f, %.8f \n",i, N-1, fplus[0], fplus[1]);
+		// printf("At grid %d of %d, the A,h, Q are %.8f,%.8f, %.8f \n",i, N-1, q[idx(0,i)], HofA( q[idx(0,i)], false), q[idx(1,i)]);
+		
+		// if (N < 40){
+		// 	cout <<  "grid:"<< i << ", A & Q:"<<q[idx(0,i)] << ", "<<q[idx(1,i)] << endl;
+		// 	cout << "fplus:"<<fplus[0] << ", "<<fplus[1] << ", fminus:"<<fminus[0] << ", "<<fminus[1] << endl; 
+		// }
 
-            //
-            //q[i]=0;
+		/*
+		Modified on 2016/11/14
+		Whenever too small, enforce it
+		*/
+        if(q[idx(0,i)]<A_base)
+        {
+            /**
+            Modified on 2016/11/14
+            **/
+            
+            q[idx(0,i)] = max(0.5*(q[idx(0,max(0,i-1))] + q[idx(0,min(N-1,i+1))]), A_base);
+            if (q[idx(1,i)] > 0){
+            	q[idx(1,i)] = min(q[idx(1,i)],0.5*(q[idx(1,max(0,max(0,i-1)))] + q[idx(1,min(N-1,i+1))]));
+            }
+            else{  //consider the inverse flow
+            	q[idx(1,i)] = max(q[idx(1,i)],0.5*(q[idx(1,max(0,max(0,i-1)))] + q[idx(1,min(N-1,i+1))]));
+            }
+            //q[idx(1,i)] = 0.;
+            cout<<"The diameter of the pipe is:"<<w<<endl;
+            printf("enforce grid %i of %i to be (A,Q) =(%.12f,%.12f) \n", i, N, q[idx(0,i)],q[idx(1,i)]);
         }        
 		//update pressurization info: if A>At-> pressurized pipe; if A<At AND a neighbor is free surface, pipe is free surface
 		P[pj(i)] = (q[idx(0,i)]>At )||( P[pj(i-1)]==true && P[pj(i+1)]==true);
 	}
 	// update rightmost cell using externally assigned fluxes bfluxleft
 	P[pj(N-1)] = (q[idx(0,N-1)]>At )||( P[pj(N-2)]==true && P[pj(N)]==true); 
-	q[idx(0, N-1)] = q0[idx(0,N-1)] - nu*(bfluxright[0]-fplus[0]);                      
+
+	q[idx(0, N-1)] = q0[idx(0,N-1)] - nu*(bfluxright[0]-fplus[0]);
 	q[idx(1,N-1)] = q0[idx(1,N-1)] - nu*(bfluxright[1] - fplus[1]);	
-    //fold in source terms
-	stepSourceTerms(dt);
+
+	if (q[idx(0, N-1)] < A_base){//Also enforce value for the final grid  
+		cout << "Too small area at the right boundary:"<<q[idx(0,N-1)]<<endl;
+		// q[idx(0, N-1)] = A_base;
+		q[idx(0,N-1)] = max(q[idx(0,N-2)], A_base);
+		if (q[idx(1,N-1)] > 0){
+        	q[idx(1,N-1)] = min(q[idx(1,N-1)],q[idx(1,N-2)]);
+        }
+        else{  //consider the inverse flow
+        	q[idx(1,N-1)] = max(q[idx(1,N-1)],q[idx(1,N-2)]);
+        }
+	}           
+
+	
+
+
+	//cout <<"numerfical flux before right boundary is:"<<fplus[0]<<","<<fplus[1]<<endl;
+
+    stepSourceTerms(dt);
+
+
         //step chlorine transport terms if tracking water quality
         if (Clplease) stepTransportTerms(dt);
-        // set q0 to updated value
+
+
+    // set q0 to updated value
 	for(i =0;i<N;i ++)
 	{
-		                                      
-		//check for negative areas --do I really need this?
-		if(q[idx(0,i)]<0)
-		{
-			/*
-            printf("!!Negative area!!!\n with a[%d] = %f at time %f\n ", i, q0[i], dt*(double)n);
-			printf("!!TOO MUCH Negative area!!! SHITSHITSHIT\n with a[%d] = %f at time %f\n ", i, q0[i], dt*(double)n);
-			printf("%d    %.16f   %.16f\n",-1, q_hist[idx_t(0,0,n)], q_hist[idx_t(1,0,n)]);  
-            for (int i=0; i<N; i++)
-            {
-            printf("%d    %.16f   %.16f\n",i, q0[idx(0,i)], q0[idx(1,i)]);  
-            }
-			printf("%d    %.16f   %.16f\n",-1, q_hist[idx_t(0,N+1,n)], q_hist[idx_t(1,N+1,n)]);  */
-            //if (q[idx(0,i)]<negtol) q[idx(0,i)]=0.;
-            retval=2;
-            //throw std::runtime_error("Oh damn. Negative area!\n");
-		}
         for(k = 0; k<2; k++)
 		{
 			q0[idx(k,i)] = q[idx(k,i)];
@@ -608,7 +661,7 @@ int Channel::stepEuler(double dt)
 //		}
 	if (WTF)printf("cmax =%f and CFL=%f",cmax, dt/dx*cmax);
     }
-    return retval;
+    return 0;
 }
 
 /** Physical flux for Preissman slot*/
@@ -644,11 +697,16 @@ void Channel::numFluxHLL(double q1m, double q1p, double q2m, double q2p, double 
 		flux[1] = 0;
 	}
 	// Update with HLL flux
-	else 
-	{                                                                                           
-    if(s[0]>=0){physFlux(q1m,q2m,flux, Pp);}
+	else
+	{                                                            
+    if(s[0]>=0){
+    	//cout<<"Using FL"<<endl;
+    	physFlux(q1m,q2m,flux, Pp);
+    }
     else if(s[0]<0 && s[1]>0)
 	{
+		
+		//cout<<"Using F*"<<endl;
 		double Fl[2];
 		double Fr[2];
 		physFlux(q1m,q2m,Fl, Pm);
@@ -657,13 +715,152 @@ void Channel::numFluxHLL(double q1m, double q1p, double q2m, double q2p, double 
 		flux[1] = (s[1]*Fl[1]-s[0]*Fr[1]+s[0]*s[1]*(q2p-q2m))/(s[1]-s[0]);
 		//cout<<"fluxes are "<<flux[0]<<" "<<flux[1]<<Fl[1]<<" "<<Fr[1]<<endl;
 	}
-        else if(s[1]<=0)
+        else if(s[1]<=0){
+        	//cout<<"Using FR"<<endl;
         	physFlux(q1p, q2p, flux, Pp);
+        }
         else
           	printf("Error! Check your speeds. Something is wrong! s = [%f,%f]\n",s[0], s[1]);
 	}
     return;
 }
+
+
+/*
+Add My algorithm here to account for the ghost cell
+*/
+void Channel::numFluxHLL1(double q1m, double q1p, double q2m, double q2p, double *flux, bool Pm, bool Pp, double Qy)                
+{
+	double s[2]={0,0};
+	double slow = 1e-5;
+	//estimate speeds (Roe or fancier)
+	speeds(q1m, q1p, q2m, q2p, s, Pm, Pp);
+	// check for near zero speeds
+	if (fabs(s[0])< slow && fabs(s[1])<slow) 
+	{                                                       
+		flux[0] = 0;
+		flux[1] = 0;
+	}
+	// Update with HLL flux
+	else
+	{                                                            
+    if(s[0]>=0){
+    	//cout<<"Using FL"<<endl;
+    	physFlux(q1m,q2m,flux, Pp);
+    }
+    else if(s[0]<0 && s[1]>0)
+	{
+		
+		//cout<<"Using F*"<<endl;
+		double Fl[2];
+		double Fr[2];
+		physFlux(q1m,q2m,Fl, Pm);
+		physFlux(q1p,q2p,Fr, Pp);
+		flux[0] = (s[1]*Fl[0]-s[0]*(Fr[0]+Qy)+s[0]*s[1]*(q1p-q1m))/(s[1]-s[0]);
+		flux[1] = (s[1]*Fl[1]-s[0]*Fr[1]+s[0]*s[1]*(q2p-q2m))/(s[1]-s[0]);
+		//cout<<"fluxes are "<<flux[0]<<" "<<flux[1]<<Fl[1]<<" "<<Fr[1]<<endl;
+	}
+        else if(s[1]<=0){
+        	cout<<"Using FR"<<endl;
+        	physFlux(q1p, q2p, flux, Pp);
+        	flux[0] += Qy;
+        }
+        else
+          	printf("Error! Check your speeds. Something is wrong! s = [%f,%f]\n",s[0], s[1]);
+	}
+    return;
+}
+
+// Left side:    q2m: QL, q1m: AL, um: uL  
+void Channel::numFluxHLL_K(double q1m, double q1p, double q2m, double q2p, double *flux, bool Pm, bool Pp, int loc)                
+{
+    
+	double s[2]={0,0};
+	double slow = 1e-3;
+
+	/*
+		Nov 20th 2016, Sanders et al. (2011) variable reconstruction
+	*/
+	double s_star = 0.1;
+	// double tol = A_area_critical;
+	// double tol = AofH(1.01e-4,false);
+	double tol = 1e-2*Af;
+
+	double AL = q1m, AR = q1p;
+	double hL, hR;  // water depth after reconstruction
+	double Sf_L = getFriction(q1m, q2m);
+	double Sf_R = getFriction(q1p, q2p);
+	double sL = fabs(Sf_L/S0);
+	double sR = fabs(Sf_R/S0);
+	if (sL < s_star && AL > tol){
+		hL = HofA(q1m, false) + 0.5*(-dx*S0/2.0*(1+cos(PI*sL/s_star)));	
+		if (hL > HofA(tol, false)){AL = AofH(hL, false);}
+		else{cout<<"hL in reconstruction algo < tol";}
+	}
+	if (sR < s_star && AR > tol){
+		hR = HofA(q1p, false) - 0.5*(-dx*S0/2.0*(1+cos(PI*sR/s_star)));
+		if (hR > HofA(tol, false)){AR = AofH(hR, false);}
+		else{cout<<"hR in reconstruction algo < tol";}
+	}
+	//printf ("q1m is %.3f, AL is %.3f \n",q1m, AL);
+	//printf ("q1p is %.3f, AR is %.3f \n",q1p, AR);
+
+
+	if (AL <= tol && AR <= tol){
+		flux[0] = 0.;
+		flux[1] = 0.;
+		// cout << "In numFluxHLL_K, get less than tol grid"<<endl;
+		return;
+	}
+
+	// End of Sandes Variable reconstruction
+
+	//estimate speeds (Roe or fancier)
+	speedsHLL_K(AL, AR, q2m, q2p, s, Pm, Pp, loc);
+	// check for near zero speeds
+	if (fabs(s[0])< slow && fabs(s[1])<slow) 
+	{                                                       
+		flux[0] = 0;
+		flux[1] = 0;
+	}
+	// Update with HLL flux
+	else
+	{                                                            
+    if(s[0]>=0){
+    	//cout<<"Using FL"<<endl;
+    	physFlux(AL,q2m,flux, Pp);
+    }
+    else if(s[0]<0 && s[1]>0)
+	{
+		
+		//cout<<"Using F*"<<endl;
+		double Fl[2];
+		double Fr[2];
+		physFlux(AL,q2m,Fl, Pm);
+		physFlux(AR,q2p,Fr, Pp);
+		flux[0] = (s[1]*Fl[0]-s[0]*Fr[0]+s[0]*s[1]*(AR-AL))/(s[1]-s[0]);
+		flux[1] = (s[1]*Fl[1]-s[0]*Fr[1]+s[0]*s[1]*(q2p-q2m))/(s[1]-s[0]);
+		//if (max(fabs(s[0]),fabs(s[1])) > 13) cout<<"unusual numerical fluxes are "<<flux[0]<<" "<<flux[1]<<"@ loc:"<< loc<<endl;
+	}
+        else if(s[1]<=0){
+        	//cout<<"Using FR"<<endl;
+        	physFlux(AR, q2p, flux, Pp);
+        }
+        else
+          	printf("Error! Check your speeds. Something is wrong! s = [%f,%f]\n",s[0], s[1]);
+	}
+	
+    return;
+}
+
+
+/*
+My own algorithm ends here
+*/
+
+
+
+
 
 /**de St. Venant flux function (See Leon 2009)
  *This is valid for either cuniform (uniform width) or cpreiss (Preissman slot) channel classes
@@ -719,19 +916,34 @@ double Channel::max3(double a, double b, double c)
  ****/
 void Channel::stepSourceTerms(double dt){
 	int i;
+
 	for (i=0; i<N; i++)
 	{
+		if (q[idx(0,i)] < A_area_critical){cout <<"grid i out of N:"<<i<<", "<<N<< ", A in step SourceTerms is:"<<q[idx(0,i)]<<endl;}
+		if (q[idx(0,i)] < 1.01e-2*Af && q[idx(0,i+1)] < 1.001e-2*Af && q[idx(0,max(i-1,0))] < 1.001e-2*Af) continue;  
 		q[idx(1,i)]= q[idx(1,i)] +dt*getSourceTerms(q[idx(0,i)], q[idx(1,i)] +dt/2.*getSourceTerms(q[idx(0,i)],q[idx(1,i)]));
+		//SandersUpdateQ(dt, i);
 		q0[idx(1,i)] = q[idx(1,i)];
-      //  double u= q[idx(1,i)]/q[idx(0,i)];
-      //  double S1 = getSourceTerms(q[idx(0,i)],q[idx(1,i)]);
-       // double q2bar = q[idx(1,i)] +dt/2.*S1;
-       // double ubar = q2bar/q[idx(0,i)];
-      //  double S2 =  getSourceTerms(q[idx(0,i)],q2bar);
-     //   double b1= S1>0? -2.*u/S1: 0.;
-    //    double b2= S2>0? -4.*ubar/(S2):0.;
-    //    printf("u = %f, ubar = %f, S1 = %f, S2 == %f,dt = %f, CFL = %f",u,ubar,S1,S2, dt,min(b1,b2));
-        if (q[idx(1,i)]>10) printf("whoops Q[%d] = %f\n",i,q[idx(1,i)]);
+		
+        //  double u= q[idx(1,i)]/q[idx(0,i)];
+        //  double S1 = getSourceTerms(q[idx(0,i)],q[idx(1,i)]);
+        // double q2bar = q[idx(1,i)] +dt/2.*S1;
+        // double ubar = q2bar/q[idx(0,i)];
+        //  double S2 =  getSourceTerms(q[idx(0,i)],q2bar);
+        //   double b1= S1>0? -2.*u/S1: 0.;
+        //    double b2= S2>0? -4.*ubar/(S2):0.;
+        //    printf("u = %f, ubar = %f, S1 = %f, S2 == %f,dt = %f, CFL = %f",u,ubar,S1,S2, dt,min(b1,b2));
+        if (q[idx(1,i)]>10) 
+        {
+    		cout<< "the total grid number for this pipe is "<< N<<endl;
+    		printf("whoops Q[%d] = %f\n",i,q[idx(1,i)]);
+    		printf("The friction term = %f\n",getFriction(q[idx(0,i)],q[idx(1,i)]));
+    		printf("The A value is = %f\n",q[idx(0,i)]);
+    		printf("The first source term is %f", getSourceTerms(q[idx(0,i)],q[idx(1,i)]));
+    		printf("The second source term is %f",getSourceTerms(q[idx(0,i)], q[idx(1,i)] +dt/2.*getSourceTerms(q[idx(0,i)],q[idx(1,i)])));
+    	}
+	    
+        
 	}
 	
 }
@@ -743,13 +955,86 @@ void Channel::stepSourceTerms(double dt){
  **/
 double Channel::getSourceTerms(double A, double Q){
 	double Sf=0;
-	double tol = At*1e-2;
-	if (A>tol)
-	{
-		Sf = pow(Mr/kn,2)*Q*fabs(Q)/(A*A*pow(getHydRad(A),4./3.));	
+	double tol = At*1e-2;   
+
+	//printf ("the slope is %.3f \n",S0);  // Has checked that S0 is right, no need to worry
+
+	/*
+	Modified on Nov 1=27, 2016
+	According to Sanders et al (2011)
+	Source Term Treatment Technique
+	*/
+    double dz = -S0*dx;  
+    double hi = HofA(A, false);
+    double h_cri = HofA(A_area_critical, false);
+    double h1 = hi - 0.5*dz;
+    double h2 = hi + 0.5*dz;
+    h1 = (h1>h_cri? h1: h_cri);
+    h2 = (h2>h_cri? h2: h_cri);
+    double S0i = 1./dx/G/A*(Eta(AofH(h1, false), false) - Eta(AofH(h2, false), false));
+
+	/*
+	Nov 20th, 2016
+	I do not think that it is necessary to restrict the application of A>tol, so planned to remove the following condition
+	*/
+	// if (A>tol || true)
+	// {
+	// 	Sf = pow(Mr/kn,2)*Q*Q/(A*A*pow(getHydRad(A),4./3.));	
+	// }
+	
+	Sf = pow(Mr/kn,2)*Q*fabs(Q)/(A*A*pow(getHydRad(A),4./3.));
+	if (Sf > 50){
+		cout <<"S0,S0i:"<<S0 << ", "<<S0i<< ",Sf:"<<Sf<<", A:"<< A << ", Q:"<< Q <<",Rh(A):"<<getHydRad(A)<<endl;
 	}
+	//return (S0-Sf)*G*A;
+	return (S0i-Sf)*G*A;
+	
+}
+
+
+/*
+		Modified on Dec 3rd, 2016
+		Applied Sanders et al (2011) source term treatment
+*/
+void Channel::SandersUpdateQ(double dt, int i){
+	double dz = -S0*dx;  
+    double hi = HofA(q0[idx(0,i)], false);
+    double h_cri = HofA(A_area_critical, false);
+    double h1 = hi - 0.5*dz;
+    double h2 = hi + 0.5*dz;
+    h1 = (h1>h_cri? h1: h_cri);
+    h2 = (h2>h_cri? h2: h_cri);
+    double S0i = 1./dx/G/q0[idx(0,i)]*(Eta(AofH(h1, false), false) - Eta(AofH(h2, false), false));
+    q[idx(1,i)] = q[idx(1,i)] + dt*S0i*G*q[idx(0,i)];
+	q[idx(1,i)] = q[idx(1,i)]/(1.+ dt*getFriction(q[idx(0,i)],q[idx(1,i)])/q[idx(1,i)]*G*q[idx(0,i)]);
+
+}
+
+
+double Channel::getFriction(double A, double Q){
+	double Sf=0;
+	double tol = At*1e-2;   
+
+	/*
+
+	Nov 20th, 2016
+	I do not think that it is necessary to restrict the application of A>tol, so planned to remove the following condition
+	In stepEuler, I have manully enforced that:
+		when A< A_base, set A= A_base and skip the source term update
+	
+	*/
+
+	/*	
+	if (A>tol || true)
+	{
+		Sf = pow(Mr/kn,2)*Q*Q/(A*A*pow(getHydRad(A),4./3.));	
+	}
+	*/
+
+	Sf = pow(Mr/kn,2)*Q*fabs(Q)/(A*A*pow(getHydRad(A),4./3.));
     //printf("Sf = %f S0 = %f A = %f, Q = %f, Rh^(4/3)=%f\n", Sf, S0, A,Q, pow(getHydRad(A),4./3.));
-	return (S0-Sf)*G*A;
+	return Sf;
+
 }
 
 double Channel::getMassTransCoeff(double ui)//from Rossman 1994 J. Env. Eng pg 805
@@ -881,17 +1166,13 @@ double Channel::getAveGradH(int i)
 	double I = 0;
 	for (int k = 1; k<N+1; k++)
 	{
-		
-		if (L2yes)
-            {I+= (h2-h1);}
-        else
-            {I+= abs(h2-h1);}
-        h1 = h2;
+		I+= abs(h2-h1);
+		h1 = h2;
 		a1 = a2;
 		a2 = q_hist[idx_t(0,k+1,i)]; 
 		h2 = pbar(a2,p);
 	}
-	return I/sqrt(dx);
+	return I;
 }
 
 
@@ -1028,6 +1309,9 @@ void Cpreiss::setGeom(double a_)
 	tt = 2*(PI-asin(Ts/D));// theta such that c(A(theta)) = a
 	yt = D/2.*(1-cos(tt/2.));
 	At = AofH(yt,false);
+	/*
+	Modified on Nov 20th, 2016, I do not think that it is necessary to output a file
+
 	//write out a file tabulating A, g, I, c, phi, A(phi), A(h(A)) etc (use as sanity check)
 	char fname1[30];
 	clock_t time1 = clock();
@@ -1067,6 +1351,7 @@ void Cpreiss::setGeom(double a_)
 		} 
 	}
 	fclose(fg2);
+	*/
 }
 
 	
@@ -1094,7 +1379,7 @@ double Cpreiss::getHydRad(double A)
 		{
 			double y = HofA(A,false);
 			double theta = 2*acos(1.-2*y/D);
-            if (theta<1e-4)
+            if (theta<A_area_critical)
             {
                 R = D/(24.)*theta*theta; ///taylor expand for small theta
                 //printf("hyrdaulic radius= %f, theta =%f, A = %f\n",R,theta,A);
@@ -1144,8 +1429,136 @@ void Cpreiss::speedsRoe(double q1m, double q1p, double q2m, double q2p, double *
 
 /**
  * HLL speed estimates from Leon 2009 
+ q2m = Q1, q1m = A1
+ q2p = Q2, q1p = A2
+ speeds(A1, A2, Q1, Q2, s, P1, P2)
  * */
 void Cpreiss::speedsHLL(double q1m, double q1p, double q2m, double q2p, double *s, bool Pm, bool Pp){
+	double dry = 1e-6*At;                                                  //pay attention to this!?
+    double cbar,Astar, ym,yp,cm, cp, um =0 , up= 0;	
+	double Astarp;
+	//other wave speed estimates from Sanders 2011 (keep around for comparison purposes?)
+	double sl1, sl2, sr1, sr2;
+	ym = HofA(q1m,Pm);
+	yp = HofA(q1p,Pp);
+	cm = Cgrav(q1m, Pm);
+	cp = Cgrav(q1p, Pp);
+	//if no dry bed present
+	if(fmin(ym,yp)>=dry){
+		cbar = (cp+cm)/2.;
+		um = q2m/q1m;     // left,     q2m: QL, q1m: AL, um: uL 
+		up = q2p/q1p;     // right     q2p: QR, q1p: AR, up: uR
+
+		//this verstion uses depth positivity condition
+		//Astar = (q1m+q1p)/2.*(1+(um-up)/(PhiofA(q1p,Pp)+PhiofA(q1m,Pm))); 
+
+		//this is linearized version, Anna's choice
+		//Astar = (q1m+q1p)/2.*(1+( (cbar>1e-6)? (um-up)/(2.*cbar): 0));
+        
+
+        /*
+		Nov 20th, 2016
+		Following Leon et al 2016
+		when y< 0.8d, using depth positive
+		else, using two-rarefaction iteratively get
+        */
+
+		if (max(ym, yp) < 0.8*D){
+			Astar = (q1m+q1p)/2.*(1+(um-up)/(PhiofA(q1p,Pp)+PhiofA(q1m,Pm))); 
+		}
+       	else{
+       		
+       		double low = fmin(q1m, q1p)/3;
+       		double high = fmax(q1m, q1p)*3;
+       		double low_error = two_rarefaction_func(um, up, q1m, q1p, low);
+       		double high_error = two_rarefaction_func(um, up, q1m, q1p, high);
+       		Astar = two_rarefaction_iter(um, up, q1m, q1p, low, low_error, high, high_error);
+       		if (Astar == 0.) {
+       			cout << "lineration Instead"<<endl;
+       			Astar = (q1m+q1p)/2.*(1+( (cbar>1e-6)? (um-up)/(2.*cbar): 0));  //modified on Feb 12, 2917. If cannot solve, use depth postive
+       		}
+       	}
+       	
+       	// The modification of Astar ends here
+
+		bool Ps = (Pm && Pp);
+		
+		s[0] = um - findOmega(Astar, q1m, Ps, Pm);
+		s[1] = up + findOmega(Astar, q1p, Ps, Pp);
+	}
+	else{
+		// Both sides dry - both stay dry
+		if(fmax(ym,yp)<dry)     
+		{
+			s[0] = 0.;
+			s[1] = 0.;
+		}
+		//left side dry
+		else if(ym<dry)  
+		{
+			up = q2p/q1p;
+			s[0] = up - PhiofA(q1p,Pp);
+			s[1] = up + cp;	
+        //    printf("left side dry. s[0] = %f, s[1] = %f, up = %f, q1p = %f q2p = %f cp = %f \n", s[0], s[1], up, q1p,q2p,cp );
+		}
+		//right side dry
+		else if(yp<dry) 
+		{
+			um = q2m/q1m;
+			s[0] = um - cm;
+			s[1] = um + PhiofA(q1m,Pm);
+          //  printf("right side dry. s[0] = %f, s[1] = %f, um = %f, q1m = %f q2m = %f cm = %f \n", s[0], s[1], um, q1m,q2m,cm );
+		}
+		
+	}
+	if(isnan(s[0]) || isnan(s[1])) //check for NaNs
+	{
+		printf("Error!nan speeds!s[0] = %f, s[1] = %f, with y1 = %.10f, y2 = %.10f\n", s[0], s[1],ym, yp);
+		printf("q1p is %f and q2p is %f, um is %f, up is %f\n", q1p, q2p, um, q2p);
+		exit (1);
+	}
+	//check that HLL speeds have s0<s1; really, this should never bloody happen!
+	if(s[0]>s[1]) 	
+	{  
+//	printf("The hell? s[0]>s[1], with q1m = %f, q2m = %f, q1p =%f, q2p =%f, s[0] = %f, s[1] = %f\n",q1m,q2m,q1p,q2p,s[0],s[1]);
+	//use Sanders wave speed estimates instead if this happens
+	double stemp = s[0];
+    s[0] = s[1];
+    s[1] = stemp;
+    //s[0] = min(sl1,sl2);
+//    s[1] = max(sr1,sr2);
+	}
+	cmax = max(cmax, max(fabs(s[0]),fabs(s[1]))); 
+	if (max(fabs(s[0]),fabs(s[1])) > 13)	cout <<"old speeds:"<<s[0]<<", "<<s[1]<<endl; 	   
+}
+
+
+double Cpreiss::two_rarefaction_func(double uL, double uR, double AL, double AR,  double Astar){
+	double re;
+	re = uL - uR + (Cgrav(AL, false) + Cgrav(Astar, false))*(AL - Astar)/(AL + Astar) - (Cgrav(Astar, false) + Cgrav(AR, false))*(Astar - AR)/(AR + Astar);
+	return re;
+}
+
+
+double Cpreiss::two_rarefaction_iter(double uL, double uR, double AL, double AR,  double low, double low_error, double high, double high_error){
+	double current = (low + high)/2;
+	double current_error;
+	current_error = two_rarefaction_func(uL, uR, AL, AR, current);
+	if (current_error < 1e-8){
+		return current;
+	}
+	if (current_error*low_error < 0)
+		return two_rarefaction_iter(uL, uR, AL, AR, low, low_error, current, current_error);
+	if (current_error*high_error <0)
+		return two_rarefaction_iter(uL, uR, AL, AR, current, current_error, high, high_error);
+	printf("Two rarefaction cannot iteratively find the solution, check boundary \n");
+	return 0.;
+}
+
+
+
+/**My own algorithm here**/
+void Cpreiss::speedsHLL_K(double q1m, double q1p, double q2m, double q2p, double *s, bool Pm, bool Pp, int loc){
 //	double dry = 1e-6*At;                                                  //pay attention to this!?
     double cbar,Astar, ym,yp,cm, cp, um =0 , up= 0;	
 	double Astarp;
@@ -1162,16 +1575,82 @@ void Cpreiss::speedsHLL(double q1m, double q1p, double q2m, double q2p, double *
 		up = q2p/q1p;
 		//this verstion uses depth positivity condition
 		//Astar = (q1m+q1p)/2.*(1+(um-up)/(PhiofA(q1p,Pp)+PhiofA(q1m,Pm))); 
-		//this is linearized version
-		//use linearized estimate for Astar
-        if(linAstar)
-            Astar = (q1m+q1p)/2.*(1+( (cbar>1e-6)? (um-up)/(2.*cbar): 0));
-        //else use depth-positivity preserving (ostensibly!) estimate
-        else
-            Astar = (q1m+q1p)/2.*(1+(um-up)/(PhiofA(q1p,Pp)+PhiofA(q1m,Pm))); 
+
+		//this is linearized version, Anna's choice
+		//Astar = (q1m+q1p)/2.*(1+( (cbar>1e-6)? (um-up)/(2.*cbar): 0));
+        
+		/*********************************
+		**********************************
+		 From Karney(2015), an updated version is listed belwo to suppress oscillation
+		 This proves to be very effective in the result
+		 Two important parameters are K and Ns, here I use a single T junction to calibrate
+		 The calibrating model is stored in ipython notebook as T_junction
+		 ********************************
+		 *******************************/
+		double K = 1.11;   
+		double Ns = 6;
+		double maxA = max(q1m, q1p);
+		double Aplus, Aminus;
+		// Take current point as the mark and trace towards two directions to search for the maximum number
+		for(int i=1;i<Ns;i++){
+			// if (loc+2+i<= N+1){
+			// 	Aplus = q_hist[idx_t(0,loc+2+i,n)];
+			// 	if (Aplus > maxA){maxA = Aplus;}
+			// }
+			// if (loc+1-i>=0){
+			// 	Aminus = q_hist[idx_t(0,loc+1-i,n)];
+			// 	if (Aminus > maxA){maxA = Aminus;}
+			if (loc+2+i<= N+1){
+				// if (loc+2+i == N+1 && n==1) Aplus = q_hist[idx_t(0,loc+2+i,M)];
+				// if (Aplus > maxA){maxA = Aplus;}
+				// else  Aplus = q_hist[idx_t(0,loc+2+i,n)];
+				Aplus = q_hist[idx_t(0,loc+2+i,n)];
+				if (Aplus > maxA){maxA = Aplus;}
+			}
+			if (loc+1-i>=0){
+				// if (loc+1-i == 0 && n==1) Aminus = q_hist[idx_t(0,loc+1-i,M)];
+				// if (Aminus > maxA){maxA = Aminus;}
+				// else  Aminus = q_hist[idx_t(0,loc+1-i,n)];
+				Aminus = q_hist[idx_t(0,loc+1-i,n)];
+				if (Aminus > maxA){maxA = Aminus;}
+			}
+		}
+		Astar = K*maxA;
+
+        //if (Astar<0)
+        //{
+           // printf("using depth positivity condition\n");
+        // Astar = (q1m+q1p)/2.*(1+(um-up)/(PhiofA(q1p,Pp)+PhiofA(q1m,Pm))); 
+        //}  
 		bool Ps = (Pm && Pp);
+		// From Karney(2015), an updated approach to calculate wave speed
+		if (q1m <= At){
+			s[0] =  1.*um - findOmega(Astar, q1m, Ps, Pm);
+			// if (fabs(um) < 10.) s[0] =  1.*um - findOmega(Astar, q1m, Ps, Pm);
+			// else s[0] =  0.*um - findOmega(Astar, q1m, Ps, Pm);
+		}
+		else{
+			s[0] =  um - a;  // seems to have something wrong with the D block
+			// s[0] =  0.*um - findOmega(Astar, q1m, Ps, Pm);
+		}
+
+		if (q1p <= At){
+			s[1] = 1.*up + findOmega(Astar, q1p, Ps, Pp);
+			// if (fabs(up) < 10.) s[1] = 1.*up + findOmega(Astar, q1p, Ps, Pp);
+			// else s[1] = 0.*up + findOmega(Astar, q1p, Ps, Pp);
+		}
+		else{
+			s[1] = up + a;   // seems to have something wrong with the D block
+			// s[1] = 0.*up + findOmega(Astar, q1p, Ps, Pp);
+		}
+/* 
 		s[0] = um - findOmega(Astar, q1m, Ps, Pm);
 		s[1] = up + findOmega(Astar, q1p, Ps, Pp);
+		
+*/
+
+
+
 		// Sanders estimates (not very good--use them if the other estimate messes up(??!))
 //		double Vs, cs, phip, phim;
 //		phim = PhiofA(q1m, Pm);
@@ -1238,7 +1717,8 @@ void Cpreiss::speedsHLL(double q1m, double q1p, double q2m, double q2p, double *
     //s[0] = min(sl1,sl2);
 //    s[1] = max(sr1,sr2);
 	}
-	cmax = max(cmax, max(fabs(s[0]),fabs(s[1]))); 		   
+	cmax = max(cmax, max(fabs(s[0]),fabs(s[1])));
+	//if (max(fabs(s[0]),fabs(s[1])) > 13) cout <<"Astar:"<<Astar<<",Aleft: "<<q1m<<", Aright:"<<q1p<<", Karney speeds:"<<s[0]<<", "<<s[1]<<"@ loc:"<<loc<<endl; 		   
 }
 
 /**
@@ -1316,7 +1796,7 @@ void Junction1::boundaryFluxes()
 	double Qtol = 1e-12;
 	bool Pin, Pext;
 	double ctol = 0;		      //tolerance for trying to solve for characteristic solns
-    double sign = pow(-1.,whichend+1);    //gives the sign in u (plus or minus) phi (left side: -1, right side: +1)
+    double sign = pow(-1.,whichend+1 );    //gives the sign in u (plus or minus) phi (left side: -1, right side: +1)
 	//update bCl to current value if we care
     double bCl = Clbval[ch0.n];
     if (whichend)                         //if we're on the right side of pipe
@@ -1347,10 +1827,15 @@ void Junction1::boundaryFluxes()
 	if(reflect ==1) bccase = 0;
 	else if(reflect ==-1) bccase =1;
 	else
-	{
+	{	
+		//cout<<"vin, Cgrav: "<< Qin/Ain<<", "<<  ch0.Cgrav(Ain,Pin)<<endl;
 		if (fabs(Qin)/Ain>ch0.Cgrav(Ain, Pin))  //first check for supercritical flow
 		{
-			Qext = bval[ch0.n];		
+			cout << "supercritical flow"<<endl;
+			// To make continuous
+			if (ch0.n == 1) Qext = bval[ch0.M];
+			else Qext = bval[ch0.n];	
+
 			if (fabs(Qext)<Qtol) bccase =0;      //just reflect
 			else if((whichend &&(Qext>Qtol)) ||(!whichend &&Qext<-Qtol)) bccase=1;          //supercitical outflow -> extrapolate
 			else bccase = 21;               //dredge up a reasonable value of Aext or Qext!
@@ -1358,6 +1843,18 @@ void Junction1::boundaryFluxes()
 		else
 		{
 			if (bvaltype==0)bccase = 312;		//if specifying A
+			if(bvaltype==2){ 
+				eext = fabs(bval[ch0.n]);
+				// if (Ain < 1.01e-2*ch0.Af){
+				// 	cout<<"Dry grids at the end"<<endl;
+				// 	bccase = 0;
+				// }
+				if (Ain<ch0.AofH(eext,false)) {cout<<"case 1 because of Ain<cho.AofH(eext)"<<endl;bccase =1;} // original: Ain<ch0.At
+				else{ 
+					cout <<"In bvaltype2 judgement, we have A, A(orifice):"<< Ain<<", "<< ch0.AofH(eext, false)<<endl;
+					bccase=4;
+				}
+			}
 			else if(bvaltype==1)				//if specifying Q
 			{
 				Qext = bval[ch0.n];				//sample the boundary time series at the current time step
@@ -1393,10 +1890,15 @@ void Junction1::boundaryFluxes()
 			}
 		}
 	}
+	/*
 	if(bvaltype==2){
 		if (Ain<ch0.At) bccase =1;
 		else bccase=4;
 	}
+	changed!!
+	*/  
+	cout<<"bccase = "<<bccase<<endl;
+	//cout<<"bvaltype ="<< bvaltype <<","<<typeid(bvaltype).name()<<endl;
 	switch(bccase)
 	{
 		case 0://reflect everything
@@ -1408,16 +1910,22 @@ void Junction1::boundaryFluxes()
 			Qext = Qin;
 			break;
 		case 21://supercritical inflow...make up correct value of Aext...?
-			if (bvaltype==0)
+			if (bvaltype==0)   //specify A
 			{
+				cout<< "case 21 A specified conditiond"<<endl;
 				Aext = bval[ch0.n];
-				Qext = (Qin*Aext/Ain)*(ch0.Cgrav(Aext, Pin)*ch0.Cgrav(Ain, Pin));
+				Qext = (Qin*Aext/Ain)*(ch0.Cgrav(Aext, Pin)/ch0.Cgrav(Ain, Pin));   //changed!
+				cout <<"Aext, Qext:"<<Aext<<", "<<Qext<<endl;
 			}
-			else
+			else     // bvaltype = 1 specify Q
 			{
+				cout << "case 21 else condition" <<endl;
 				Qext =bval[ch0.n];
 				//Aext = Ain*Qext/Qin;
-				Aext = ch0.q_hist[ch0.idx_t(0,0,max(ch0.n-1,0))];        //use previous value of Aext unless you are at the beginning...
+				//Aext = ch0.q_hist[ch0.idx_t(0,Npe,max(ch0.n-1,0))];        //use previous value of Aext unless you are at the beginning...
+				double a = ch0.a;
+				double A_bound = ch0.At + G*ch0.At/pow(a,2)*0.;  // crosee section area, by changing 0 can set IC boundary pressure to other values
+				Aext = max(A_bound, Ain);              // IMPORTANT CHANGE, DEFINE INFLOW ENERGY!!! Modified on Aug 1st, 2016
 			}
 			break;
 		case 310://subcritical, specify Q<Qtol	
@@ -1481,19 +1989,95 @@ void Junction1::boundaryFluxes()
 			bval[ch0.n] = Qext;
 			break;
 		case 4://Orifice outflow
+		{
 			Cd = 0.78; //discharge coefficient
 			Cc = 0.83;//contraction coefficient (see Trajkovic 1999)
-			eext = bval[ch0.n];
-			dp0 = ch0.HofA(Ain, Pin)-Cc*eext;
-			if (dp0>0 && Qin>0)
-			{
-				Aext = ch0.AofH(Cc*eext, false);
+			//cout<<"YOOO"<<endl;
+			
+			double ext;
+			ext = bval[ch0.n];
+			eext = fabs(ext);
+		
+			dp0 = ch0.HofA(Ain, Pin)-Cc*eext; 
+			Aext = ch0.AofH(Cc*eext, false);  
+			if (ext >= 0){  
 				Qext = Cd*Aext*sqrt(2.*G*dp0);
-				Aext = Ain;
-		//	these two lines work but are boring.
-			//	Qext = Qin;
-			//	Aext = Qext/(Cd*sqrt(2*G*dp0));
-				cout<<"orifice eqn! Qext = "<<Qext<<"  Qin = "<<Qin<<"  Aext = "<<Aext<<"  Ain = "<<Ain<<"  eext ="<<eext<<" h(Aext)="<<ch0.HofA(Aext,Pext)<<endl;
+			} 
+			else{
+				Qext = -Cd*Aext*sqrt(2.*G*dp0);
+			}
+			Aext = Ain;
+		    cout<<"Anna's orifice eqn! Qext = "<<Qext<<"  Qin = "<<Qin<<"  Aext = "<<Aext<<"  dp0= "<<dp0<<"  eext ="<<eext<<" h(Aext)="<<ch0.pbar(Aext,Pext)<<endl;
+
+
+			// dp0 = ch0.pbar(Ain, Pin)-Cc*eext;     //Modified, from HofA to pbar, work well for opening < 40%
+			// if (dp0>0 )
+			// {
+			// 	Aext = ch0.AofH(eext, false); 
+			// 	if (ext >= 0){   
+			// 		Qext = Cd*Aext*sqrt(2.*G*dp0);
+			// 	} 
+				 
+			// 		// Here we allow negative openings, so that flow from the other end can be simulated with the same code
+			// 		// Modified on Jan 25, 2017 
+				
+			// 	else{
+			// 		Qext = -Cd*Aext*sqrt(2.*G*dp0);
+			// 	}
+			// 	Aext = Ain;
+			//     cout<<" orifice eqn! Qext = "<<Qext<<"  Qin = "<<Qin<<"  Aext = "<<Aext<<"  Ain = "<<Ain<<"  eext ="<<eext<<" h(Aext)="<<ch0.pbar(Aext,Pext)<<endl;
+			// }
+			// else
+			// {
+			// 	/*
+			// 	Qext = Qin;
+			// 	Aext = Ain;
+			// 	cout << "Free flow"<<endl;
+			// 	*/
+			// 	// Modified on Oct 28th, believe that the commented formula above does not work well for large orifice, so replace with theoretical equation 
+			// 	// Not good for 60% opening, but good for 80% opening 
+
+			// 	/* //Theoretical Equation
+			// 	double vin,A_critical;
+			// 	vin = Qin/Ain;
+			// 	A_critical = ch0.AofH(eext,false);
+			// 	Qext = A_critical*0.82*sqrt(2.*G*(ch0.pbar(Ain,true)+vin*vin/2/G));    //pbar calculated pressure head
+			// 	//dH = -ch0.a/G/A_critical*(Qext-Qin);
+			// 	//Aext = ch0.AofH(ch0.HofA(Ain,false)-dH,false);
+			// 	Aext = Ain;
+			// 	cout<<"orifice flow!!"<<endl;
+			// 	*/
+			// 	dp0 = ch0.HofA(Ain, Pin)-Cc*eext; 
+			// 	Aext = ch0.AofH(Cc*eext, false);  
+			// 	if (ext >= 0){  
+			// 		Qext = Cd*Aext*sqrt(2.*G*dp0);
+			// 	} 
+			// 	else{
+			// 		Qext = -Cd*Aext*sqrt(2.*G*dp0);
+			// 	}
+			// 	Aext = Ain;
+			//     cout<<"Anna's orifice eqn! Qext = "<<Qext<<"  Qin = "<<Qin<<"  Aext = "<<Aext<<"  Ain = "<<Ain<<"  eext ="<<eext<<" h(Aext)="<<ch0.pbar(Aext,Pext)<<endl;
+			// }
+		
+		
+		
+		
+			break;
+		}
+		// Changed! Add by myself
+		/* Not sure if should be added
+		case 5:
+			eext = bval[ch0.n];
+			double vin,A_critical,dH;
+			vin = Qin/Ain;
+			A_critical = ch0.AofH(eext,false);
+			if (Ain>A_critical)  //changed! remove Qin>0 condition
+			{
+				cout<<'here'<<endl;
+				Qext = A_critical*0.82*sqrt(2.*G*(ch0.HofA(Ain,false)+vin*vin/2.*G));
+				//dH = -ch0.a/G/A_critical*(Qext-Qin);
+				//Aext = ch0.AofH(ch0.HofA(Ain,false)-dH,false);
+				Aext = 0;
 			}
 			else
 			{
@@ -1501,22 +2085,26 @@ void Junction1::boundaryFluxes()
 				Aext = Ain;
 			}
 			break;
+		*/
 		default:
 			Aext = Ain;
 			Qext = Qin;
-		break;
+		//break; changed, default statement does not require break
 	}	
 	//compute the fluxes using numFlux
 	if(whichend)//right end of pipe
 	{	
-		ch0.numFlux(Ain, Aext, Qin, Qext, ch0.bfluxright, ch0.P[N], ch0.P[N+1]);
+		// ch0.numFlux(Ain, Aext, Qin, Qext, ch0.bfluxright, ch0.P[N], ch0.P[N+1]);
+		ch0.numFluxHLL_K(Ain, Aext, Qin, Qext, ch0.bfluxright, ch0.P[N], ch0.P[N+1], ch0.N);
 		if(WTF) printf("\n in junction routine!Aext =%f, Ain = %f, Qin %f, Qext = %f, bfluxright = [%f,%f]\n",Aext, Ain, Qin, Qext,ch0.bfluxright[0],ch0.bfluxright[1]);
 	}
 	else
 	{
-		ch0.numFlux(Aext, Ain, Qext, Qin, ch0.bfluxleft, ch0.P[0], ch0.P[1]);
+		// ch0.numFlux(Aext, Ain, Qext, Qin, ch0.bfluxleft, ch0.P[0], ch0.P[1]);
+		ch0.numFluxHLL_K(Aext, Ain, Qext, Qin, ch0.bfluxleft, ch0.P[0], ch0.P[1],1);
 		if(WTF)	printf("\nin junction routine!Aext =%f, Ain = %f, Qin %f, Qext = %f, bfluxleft = [%f,%f]\n",Aext, Ain, Qin, Qext,ch0.bfluxleft[0],ch0.bfluxleft[1]);
 	}
+	//cout << "Junc1: stored ghost cell value (A,Q): "<<Aext<<", "<<Qext<<"  at grid number "<<Npe<<endl;
 	ch0.q_hist[ch0.idx_t(0,Npe,ch0.n)] = Aext;
 	ch0.q_hist[ch0.idx_t(1,Npe,ch0.n)] = Qext;
 	//update boundary pressurization states
@@ -1716,9 +2304,12 @@ void Junction2::boundaryFluxes(double dt)
 		{
             if(!whichend1)//left end of pipe 1
             {
-                ch0.numFlux(q1m,q1pfake, q2m, q2p*valveopen, ch0.bfluxright, pm, pp);
+            	// printf("Two-pipe junction! the two neighboring area are %.8f, %.8f \n", q1m, q1pfake);
+            	ch0.numFluxHLL_K(q1m,q1pfake, q2m, q2p*valveopen, ch0.bfluxright, pm, pp, ch0.N);
+                // ch0.numFlux(q1m,q1pfake, q2m, q2p*valveopen, ch0.bfluxright, pm, pp);
                 ch1.bfluxleft[0] = ch0.bfluxright[0];	
                 ch1.bfluxleft[1] = ch0.bfluxright[1];
+                // printf("Two-pipe junction! the boundary flux are %.8f, %.8f \n", ch1.bfluxleft[0], ch1.bfluxleft[1]);
                 if (ul<0){dCll = ch1.bCll-ch0.bClr;}
                 else{dCll = ch0.bClr-ch0.Cl[N0];}
               //  dClr = dCll;
@@ -1731,7 +2322,8 @@ void Junction2::boundaryFluxes(double dt)
             }
             else//also right end of pipe 1
             {
-                ch0.numFlux(q1m,q1pfake, q2m, q2p*valveopen, ch0.bfluxright, pm, pp);
+            	ch0.numFluxHLL_K(q1m,q1pfake, q2m, q2p*valveopen, ch0.bfluxright, pm, pp, ch0.N);
+                // ch0.numFlux(q1m,q1pfake, q2m, q2p*valveopen, ch0.bfluxright, pm, pp);
                 ch1.bfluxright[0] = ch0.bfluxright[0];	
                 ch1.bfluxright[1] = ch0.bfluxright[1];
                 if (ul<0){dCll = ch1.bCll-ch0.bClr;}
@@ -1749,7 +2341,8 @@ void Junction2::boundaryFluxes(double dt)
 		{
             if(whichend1)//right end of pipe 1
             { 
-                ch0.numFlux(q1pfake, q1m, q2p*valveopen, q2m, ch0.bfluxleft, pp, pm);
+            	ch0.numFluxHLL_K(q1pfake, q1m, q2p*valveopen, q2m, ch0.bfluxleft, pp, pm, 1);
+                // ch0.numFlux(q1pfake, q1m, q2p*valveopen, q2m, ch0.bfluxleft, pp, pm);
                 ch1.bfluxright[0] = ch0.bfluxleft[0];
                 ch1.bfluxright[1] = ch0.bfluxleft[1];
                 if (ul<0){dCll = ch0.bCll-ch1.bClr;}
@@ -1764,7 +2357,8 @@ void Junction2::boundaryFluxes(double dt)
             }
             else //also left end of pipe1
             {
-                ch0.numFlux(q1pfake, q1m, q2p*valveopen, q2m, ch0.bfluxleft, pp, pm);
+            	ch0.numFluxHLL_K(q1pfake, q1m, q2p*valveopen, q2m, ch0.bfluxleft, pp, pm, 1);
+                // ch0.numFlux(q1pfake, q1m, q2p*valveopen, q2m, ch0.bfluxleft, pp, pm);
                 ch1.bfluxleft[0] = ch0.bfluxleft[0];
                 ch1.bfluxleft[1] = ch0.bfluxleft[1];
                 if (ul<0){dCll = ch0.bCll-ch1.bCll;}
@@ -1778,7 +2372,8 @@ void Junction2::boundaryFluxes(double dt)
                 ch1.Cl_hist[ch1.n*(ch1.N+2)] = ch1.bCll;
             }
 		}
-
+		//cout << "Junc2: stored ghost cell value (A,Q): "<<q1pfake<<", "<<q2p*valveopen<<"  at channel 0 grid number "<<Ns0<<endl;
+		//cout << "Junc2: stored ghost cell value (A,Q): "<<q1mfake<<", "<<q2m*valveopen<<"  at channel 1 grid number "<<Ns1<<endl;
 		ch0.q_hist[ch0.idx_t(0,Ns0,ch0.n)] =  q1pfake;
 		ch0.q_hist[ch0.idx_t(1,Ns0,ch0.n)] =  q2p*valveopen;
 		ch1.q_hist[ch1.idx_t(0,Ns1,ch1.n)] =  q1mfake;
@@ -1804,6 +2399,8 @@ void Junction2::boundaryFluxes(double dt)
 }
 
 
+
+
 Junction3::Junction3(Channel &ch0, Channel &ch1, Channel &ch2, int which0, int which1, int which2): 
 			ch0(ch0), ch1(ch1), ch2(ch2),j2_01(ch0, ch1, which0, which1, 1), j2_12(ch1, ch2, which1, which2, 1),j2_21(ch2, ch1, which2, which1, 1), j2_20(ch0,ch2, which0, which2, 1)
 {
@@ -1813,7 +2410,7 @@ Junction3::Junction3(Channel &ch0, Channel &ch1, Channel &ch2, int which0, int w
 	whichend[0] = which0;
 	whichend[1] = which1;
 	whichend[2] = which2;
-    if(WTF) printf("*******whichends = [%d,%d,%d]\n", which0, which1, which2, which2);
+    printf("*******whichends = [%d,%d,%d]\n", which0, which1, which2, which2);
 
 }
 /**
@@ -1821,133 +2418,1199 @@ Junction3::Junction3(Channel &ch0, Channel &ch1, Channel &ch2, int which0, int w
  * two incoming (whichend =1) and two outging (whichend =0)
  * To do: set up machinery to have two incoming and one outgong but there's no reason to have anything else
 **/
+
+/*
+* \param [in] A cross sectional area (m^2)
+ * \param [in] D pipe diameter (m)
+ * \param [in] At transition cross-sectional area (m^2) (above this, we're in Preissman slot)
+ * \param [in] Ts preissman slot width (m)
+ * \param [in] P pressurization (bool; true or false)   
+ 
+double Eta(double A, double D, double At, double Ts, bool P)
+
+*/
+
+
+
+
+/**
+	Recursive Part to serve the following functions 
+**/
+
+double Junction3::recursefind2(double low, double low_error, double high, double high_error, double H){
+	double mid = (low+high)/2;
+	double mid_error = ch2.pbar(mid, false) - H;
+	if (fabs(mid_error) < A_area_critical) return mid;
+	if (low_error*mid_error<0){
+		//cout <<"low, mid is "<<low<<","<<mid<<endl;
+		return recursefind2(low, low_error, mid, mid_error, H);
+	}
+	if (high_error*mid_error<0){
+		//cout <<"mid, high is "<<mid<<","<<high<<endl;
+		//cout <<"mid_error, high_error is "<<mid_error<<","<<high_error<<endl;
+		return recursefind2(mid, mid_error, high, high_error, H);
+	}
+	cout<<"There must be something wrong"<<endl;
+}
+
+double Junction3::recursefind1(double low, double low_error, double high, double high_error, double H){
+	double mid = (low+high)/2;
+	double mid_error = ch1.pbar(mid, false) - H;
+	if (fabs(mid_error) < A_area_critical) return mid;
+	if (low_error*mid_error<0){
+		return recursefind1(low, low_error, mid, mid_error, H);
+	}
+	if (high_error*mid_error<0){
+		return recursefind1(mid, mid_error, high, high_error, H);
+	}
+	cout<<"There must be something wrong"<<endl;
+}
+
+/**
+	Transform junction pressure head to A of pipe 2 whose size is different from the inflow pipe 0
+**/
+double Junction3::Aofpbar2(double A){
+	double result;
+	double H = ch0.pbar(A,false);  //find Pressure Head in channel 0
+	// elevation head refers to the elevation of centroid
+	// So when both pipe is nearly full, there is almost no elevation difference
+	if (H > ch2.pbar(ch2.At,false)){
+		result = (ch2.w/2-ch2.At/ch2.Ts)/(4.*H/PI/pow(ch2.w,2)-1/ch2.Ts);
+	}
+	else{
+		if (A < A_area_critical) return A;
+		// Here A_area_critical is only treated as a critical value to measure if two values are close enough
+		if (fabs(ch2.pbar(ch2.At, false)-H)<A_area_critical) return ch2.At;
+		result = recursefind2(0, -H, ch2.At, ch2.pbar(ch2.At, false)-H, H);
+	}
+	//cout <<"get Aofpbar2 is :"<<result<<endl;
+	//cout <<"H and Hin2 is"<<H<<", "<<ch2.pbar(result,false)<<endl;
+	return result;
+}
+
+/**
+	Transform junction pressure head to A of pipe 1 whose size is different from the inflow pipe 0
+**/
+double Junction3::Aofpbar1(double A){
+	double result;
+	double H = ch0.pbar(A,false);  //find Pressure Head in channel 0
+	if (H>ch1.pbar(ch1.At,false)){
+		result = (ch1.w/2-ch1.At/ch1.Ts)/(4.*H/3.1415926/pow(ch1.w,2)-1/ch1.Ts);
+	}
+	else{
+		if (A < A_area_critical) return A;
+		// Here A_area_critical is only treated as a critical value to measure if two values are close enough
+		if (fabs(ch1.pbar(ch1.At, false)-H)<A_area_critical) return ch1.At;
+		result = recursefind1(0, -H, ch1.At, ch1.pbar(ch1.At, false)-H, H);
+	}
+	//cout <<"get Aofpbar1 is :"<<result <<endl;
+	return result;
+}
+
+
+// The following two functions define more general Aofpar() function, has not been implemented, but already checked to be right
+double Junction3::recursefind(Channel &target_pipe, double low, double low_error, double high, double high_error, double H){
+	double mid = (low+high)/2;
+	double mid_error = target_pipe.pbar(mid, false) - H;
+	if (fabs(mid_error) < A_area_critical) return mid;
+	if (low_error*mid_error<0){
+		return recursefind(target_pipe, low, low_error, mid, mid_error, H);
+	}
+	if (high_error*mid_error<0){
+		return recursefind(target_pipe, mid, mid_error, high, high_error, H);
+	}
+	cout<<"There must be something wrong"<<endl;
+}
+
+
+double Junction3::Aofpbar(double A, Channel &ini_pipe, Channel &target_pipe){
+	double result;
+	double H = ini_pipe.pbar(A,false);  //find Pressure Head in channel 0
+	if (H>target_pipe.pbar(target_pipe.At,false)){ 
+		result = (target_pipe.w/2-target_pipe.At/target_pipe.Ts)/(4.*H/3.1415926/pow(target_pipe.w,2)-1/target_pipe.Ts);
+	}
+	else{
+		if (A < A_area_critical) return A;  // almost dry pipes, then no modification
+		if (fabs(target_pipe.pbar(target_pipe.At, false)-H)<A_area_critical) return target_pipe.At;
+		result = recursefind(target_pipe, 0, -H, target_pipe.At, target_pipe.pbar(target_pipe.At, false)-H, H);
+	}
+	return result;
+}
+
+
+double Junction3::getAstar(Channel &pipe, int loc){
+	double K = 1.; 
+	double Ns = 6;
+	double maxA = 0.;
+	// Take current point as the mark and trace towards two directions to search for the maximum number
+	for(int i=1;i<Ns;i++){
+		if (loc+2+i<= pipe.N+1){
+			double Aplus = pipe.q_hist[pipe.idx_t(0,loc+2+i,pipe.n-1)];
+			if (Aplus > maxA){maxA = Aplus;}
+		}
+		if (loc+1-i>=0){
+			double Aminus = pipe.q_hist[pipe.idx_t(0,loc+1-i,pipe.n-1)];
+			if (Aminus > maxA){maxA = Aminus;}
+		}
+	}
+	double Astar = K*maxA;
+
+  
+	// double uL = QL/AL;
+	// double uR = QR/AR;
+	// double cL = chn.Cgrav(AL, true);
+	// double cR = chn.Cgrav(AR, true);
+	// double cbar = (cL + cR)/2.;
+	// // Anna's Linear Version 
+	// double Astar = (AL+AR)/2.*(1+( (cbar>1e-4)? (uL-uR)/(2.*cbar):  A_area_critical));
+	return Astar;
+}
+
+
+
+
+
+
+double Junction3::recurseJunAtransfer(double flow_dir, Channel &pipe0, double v0, Channel &pipe1, double low, double low_error, double high, double high_error, double A_to_transfer, double X){
+	double mid = (low+high)/2;
+	double mid_error = pipe1.HofA(mid, true) + 0.*pow(v0*A_to_transfer/mid,2)/2/G*(1 + flow_dir/fabs(flow_dir)*7./8.*(1-pipe1.w/pipe0.w)) - X;
+	
+	if (fabs(mid_error) < 1e-8) {
+		cout << "mid, mid_error: "<<mid << ", "<<mid_error <<endl;
+		return mid;
+	}
+	if (mid <= A_area_critical) {
+		cout << "you cannot be smaller than A_area_critcial in transfer "<<endl;
+		return mid;  // avoid unlimited recursion
+    }
+	if (low_error*mid_error<0){
+		return recurseJunAtransfer(flow_dir, pipe0, v0, pipe1, low, low_error, mid, mid_error, A_to_transfer, X);
+	}
+	if (high_error*mid_error<0){
+		return recurseJunAtransfer(flow_dir, pipe0, v0, pipe1, mid, mid_error, high, high_error, A_to_transfer, X);
+	}
+	cout<<"There must be something wrong"<<endl;
+	abort();
+}
+/*
+	This function is desinged for T junction algorithm, when the branch pipe has a different size from the main pipe
+*/
+double Junction3::JunAtransfer(double flow_dir, Channel &pipe0, double v0, Channel &pipe1, double A_to_transfer){
+	// If junction not reaching the minimum amount of water in branch pipe, then put minimum water in branch pipes
+	if (pipe0.HofA(A_to_transfer, true) <= pipe1.HofA(A_area_critical,false) + (pipe0.w - pipe1.w)/2.) {
+		cout << "Pipe 2 still have too small flow area"<<endl;
+		return A_area_critical;
+	}
+	// cout << "A_to_transfer is: "<< A_to_transfer<<endl;
+	double result;
+	double critical_depth;
+	
+	critical_depth = pipe1.w +  (pipe0.w - pipe1.w)/2.;
+	double X = pipe0.HofA(A_to_transfer, true) + 0.*pow(v0,2)/2/G - (pipe0.w - pipe1.w)/2.;
+	if (pipe0.HofA(A_to_transfer, true) > critical_depth){
+		// Pipe 1 is already full, we are in Pressimann Slot
+		cout <<"PSM transfer @ junction"<<endl;
+		result = ( X - pipe1.w - 0.*pow(v0*A_to_transfer/pipe1.At,2)/2/G*(1+ flow_dir/fabs(flow_dir)*7./8.*(1-pipe1.w/pipe0.w)) )*pipe1.Ts + pipe1.At;
+	}
+	else{
+		// Pipe 1 is in open channel 
+		cout <<"Open Channel Transfer @ junction"<<endl;
+		double low = 0;
+		double low_error = -X; 
+		if (fabs(low_error) <= A_area_critical) return A_area_critical;
+		double high = pipe1.At;
+		double high_error = pipe1.HofA(pipe1.At, true) + 0.*pow(v0*A_to_transfer/pipe1.At,2)/2/G*(1 + flow_dir/fabs(flow_dir)*7./8.*(1-pipe1.w/pipe0.w)) - X; 
+		if (fabs(high_error) <= A_area_critical) return high;
+		result = recurseJunAtransfer(flow_dir, pipe0, v0, pipe1, low, low_error, high, high_error, A_to_transfer, X);
+	}
+	return result;
+}
+
+
+
+
+
+
+
+
 void Junction3::boundaryFluxes(double dt){
-	double flux0[2], flux1[2], flux2[2];
+	double flux0[2]={0.,0.}, flux1[2]={0.,0.}, flux2[2]={0.,0.};
 	double Abar[3], Qbar[3];
 	//pik is the percentage of flux from pipe k going into pipe i; should have sum_k pik = 1 for each i...
-	double p01, p02, p10, p12, p20, p21;  
-	p01 = 0.5;
-	p02 = 0.5;
-	p10 = 1-p01;
-	p12 = 0.5;
-	p20 = 1-p02;
-	p21 = 1-p12;
+	// double p01, p02, p10, p12, p20, p21;  
+	double allow_coef = 5.5e-2;
+	// p01 = 0.5;
+	// p02 = 0.5;
+	// p10 = 1-p01;
+	// p12 = 0.5;p21 = 1-p12;
+	// //p12 = 1.0;p21 = 1.0;
+	// p20 = 1-p02;
+	
+
 	if(whichend[0]==1 &&whichend[1] ==0 &&whichend[2] ==0)
 	{
 
-		Abar[0] = .5*(ch1.q[ch1.idx(0,0)]+ch2.q[ch2.idx(0,0)]);
-		Qbar[0] = .5*(ch1.q[ch1.idx(1,0)]+ch2.q[ch2.idx(1,0)]);
-		Abar[1] = .5*(ch0.q[ch0.idx(0,ch0.N-1)]+ch2.q[ch2.idx(0,0)]);
-		Qbar[1] = .5*(ch0.q[ch0.idx(1,ch0.N-1)]-ch2.q[ch2.idx(1,0)]);
-		Abar[2] = .5*(ch0.q[ch0.idx(0,ch0.N-1)]+ch1.q[ch1.idx(0,0)]);	
-		Qbar[2] = .5*(ch0.q[ch0.idx(1,ch0.N-1)]-ch1.q[ch1.idx(1,0)]);
-	//solve fake Reimann problems between each pair
-	//0-1 is easy
-		j2_01.boundaryFluxes(dt);
-		flux0[0] =  p01*ch0.bfluxright[0];
-		flux0[1] =  p01*ch0.bfluxright[1];
-		flux1[0] =  p10*ch1.bfluxleft[0];
-		flux1[1] =  p10*ch1.bfluxleft[1];
-	//1-2 is a pain in the neck	
-		ch2.q[ch2.idx(1,0)]= -ch2.q[ch2.idx(1,0)];
-		j2_12.boundaryFluxes(dt);	
-		ch2.q[ch2.idx(1,0)]= -ch2.q[ch2.idx(1,0)];
-		flux1[0] += p12*ch1.bfluxleft[0];
-		flux1[1] += p12*ch1.bfluxleft[1];
+		//My own algorithm begins
+		//**************************************************
+		
 
-		flux2[0] =  p21*ch2.bfluxleft[0];///formerly these two lines were bflux right. Wrong before?
-		flux2[1] =  p21*ch2.bfluxleft[1];
+		// time step n-1
+		double A0_past, Q0_past, A2_past, Q2_past, A1_past, Q1_past;
+		A0_past = ch0.q_hist[ch0.idx_t(0,ch0.N,ch0.n-1)];
+		Q0_past = ch0.q_hist[ch0.idx_t(1,ch0.N,ch0.n-1)];
+		A1_past = ch1.q_hist[ch1.idx_t(0,1,ch0.n-1)];
+		Q1_past = ch1.q_hist[ch1.idx_t(1,1,ch0.n-1)];
+		A2_past = ch2.q_hist[ch2.idx_t(0,1,ch0.n-1)];
+		Q2_past = ch2.q_hist[ch2.idx_t(1,1,ch0.n-1)];
+		double v0_past = (A0_past>1e-5 ?Q0_past/A0_past :0. );
+		double v1_past = (A1_past>1e-5 ?Q1_past/A1_past :0. );
+		double v2_past = (A2_past>1e-5 ?Q2_past/A2_past :0. );
+		double A_temp_past, Q1_temp_past, Q2_temp_past;
 
-		ch1.q[ch1.idx(1,0)]= -ch1.q[ch1.idx(1,0)];
-		j2_21.boundaryFluxes(dt);
-		ch1.q[ch1.idx(1,0)]= -ch1.q[ch1.idx(1,0)];
-		flux2[0] = p21*ch2.bfluxleft[0];
-		flux2[1] = p21*ch2.bfluxleft[1];
-	
+		// cout << "current step is:"<< ch0.n<<endl;
 
-		j2_20.boundaryFluxes(dt);
-		flux0[0] += p02*ch0.bfluxright[0];
-		flux0[1] += p02*ch0.bfluxright[1];
-		flux2[0] += p20*ch2.bfluxleft[0];
-		flux2[1] += p20*ch2.bfluxleft[1];
+		// ch0.n start from 1 in the beginning of the simulation
+		if (ch0.n > 1){
+			A_temp_past = ch0.q_hist[ch0.idx_t(0,ch0.N+1,ch0.n-1)];
+			Q1_temp_past = ch1.q_hist[ch1.idx_t(1,0,ch1.n-1)];
+			Q2_temp_past = ch2.q_hist[ch2.idx_t(1,0,ch2.n-1)];
+		}
+		else{
+			A_temp_past = ch0.q_hist[ch0.idx_t(0,ch0.N+1,ch0.M)];
+			Q1_temp_past = ch1.q_hist[ch1.idx_t(1,0,ch1.M)];
+			Q2_temp_past = ch2.q_hist[ch2.idx_t(1,0,ch2.M)];
+		}
 
-		//set all the fluxes properly
-		ch0.bfluxright[0] = flux0[0];
-		ch0.bfluxright[1] = flux0[1];
-		ch1.bfluxleft[0] = flux1[0];
-		ch1.bfluxleft[1] = flux1[1];
-		ch2.bfluxleft[0] = flux2[0];
-		ch2.bfluxleft[1] = flux2[1];
-       /* printf("triple junction fluxes are\n");
-        printf("channel 0: [%f  %f]\n",flux0[0], flux0[1]);
-        printf("channel 1: [%f  %f]\n",flux1[0], flux1[1]);
-        printf("channel 2: [%f  %f]\n",ch2.bfluxleft[0], ch2.bfluxleft[1]);*/
-		//store away the info
-		ch0.q_hist[ch0.idx_t(0,ch0.N+1,ch0.n)] = Abar[0]; 
-		ch0.q_hist[ch0.idx_t(1,ch0.N+1,ch0.n)] = Qbar[0];
-		ch1.q_hist[ch1.idx_t(0,0,ch1.n)] =  Abar[1];
-		ch1.q_hist[ch1.idx_t(1,0,ch1.n)] =  Qbar[1];
-		ch2.q_hist[ch2.idx_t(0,0,ch2.n)] =  Abar[2];
-		ch2.q_hist[ch2.idx_t(1,0,ch2.n)] =  Qbar[2];
+		if (freopen( "/home/xin/pipes/indata/Xindata/example_file.txt", "a", stdout ))
+		{
+			  printf( "this should go to the output file\n" );
+		}
+		cout << "A0_past, Q0_past is: "<< A0_past << ", "<< Q0_past<<endl;
+		cout << "A1_past, Q1_past is: "<< A1_past << ", "<< Q1_past<<endl;
+		cout << "A2_past, Q2_past is: "<< A2_past << ", "<< Q2_past<<endl;
+		// cout << "Get Past A_temp, Q1_temp, Q2_temp:"<<A_temp_past<<", "<<Q1_temp_past<<", "<<Q2_temp_past<<endl;
+
+		double vx_temp_past = (A_temp_past>1e-5 ?Q1_temp_past/A_temp_past:0.);
+
+
+		//time step n
+		double A0, Q0, A1, Q1, A2, Q2; 
+		double A_temp, Q1_temp, Q2_temp;
+		A0 = ch0.q[ch0.idx(0,ch0.N-1)];
+		Q0 = ch0.q[ch0.idx(1,ch0.N-1)];
+		A1 = ch1.q[ch1.idx(0,0)];
+		Q1 = ch1.q[ch1.idx(1,0)];
+		A2 = ch2.q[ch2.idx(0,0)];
+		Q2 = ch2.q[ch2.idx(1,0)];
+		double v0 = (A0>ch0.At*1e-4 ?Q0/A0 :0. );
+		double v1 = (A1>ch1.At*1e-4 ?Q1/A1 :0. );
+		double v2 = (A2>ch2.At*1e-4 ?Q2/A2 :0. );
+		double A_temp1, A_temp2;   // Parameters that to change A_temp to adpat to pipe of different sizes connected to the junction
+		//beta = (Q0 >0 ? 0.7+0.28*Q1/Q0: 0.);
+		//double x1 = Q1/Q0;
+		//beta = (Q0 >0 ? -0.1997*x1*x1 +0.5439*x1 + 0.6537: 0.85);
+
+		/********************************************************
+			My updated Algorithm starts
+		*****************************************d\****************/
+		// cout << "A0, Q0 is: "<< A0 << ", "<< Q0<<endl;
+		// cout << "A1, Q1 is: "<< A1 << ", "<< Q1<<endl;
+		// cout << "A2, Q2 is: "<< A2 << ", "<< Q2<<endl;
+
+		bool T1 = true;
+
+		if (T1)
+		{
+
+			/*	
+				Nomral T Dividing Connection
+				Pay attention: channel 0 must be inflow and right connected, channel 1 must be horizontal, channel 2 must be vertical
+				Both 1 and 2 should be left connected, These should be careful when establish the model
+				This routine is only designed for T junction
+				Other junction needs to be further developed
+			*/
+
+			// ofstream myfile;
+  	        // myfile.open ("/home/xin/pipes/indata/Xindata/example_file.txt");
+  			// myfile << "Writing this to a file.\n";
+  			cout<<"T dividing situation"<<endl;
+
+
+  			// myfile.close();
+			
+			double beta_m, beta_b;
+			double Q_now;
+			double km = 0., kb = 0.;
+			int junctype = 0;
+			double Q2_temp1;
+			double L = ch0.dx;
+			double Qin, Qout1, Qout2; 
+			double A_temp_past1, A_temp_past2;
+			double Q_past;
+
+			// For new trial, Mar 10 2017
+			double v1_temp_past, v2_temp_past;
+			double E0_past, E1_past, E2_past, E_loss_past, E_temp_past, E_top_past;
+			double z0_past, z1_past, z2_past, z_temp_past, z_top_past, z_temp, z_top;
+			double Ain, Aout1, Aout2;
+			double Min, Mout1;
+
+
+			//double A_jun2, A_jun2_past;
+			if (v0_past ==0 || v0==0){
+				cout<<"zero v0"<<endl;
+				A_temp = A1;
+				Q_now = Q1;
+				A_temp1 = A0;
+				Q1_temp = Q0;
+				A_temp2 = A2;
+				Q2_temp = Q2;
+				ch0.numFluxHLL_K(A0,A_temp, Q0, Q_now, ch0.bfluxright, true, true, ch0.N+1);
+				ch1.numFluxHLL_K(A_temp1, A1, Q1_temp, Q1, ch1.bfluxleft, true, true, 0);
+				ch2.numFluxHLL_K(A_temp2, A2, Q2_temp, Q2, ch2.bfluxleft, true, true, 0);
+			}
+			else{
+				// 1% of intial water as critical depth                                                     
+				if (ch0.HofA(A_temp_past, false) - ch0.w/2 + ch2.w/2 <= ch2.HofA(1e-2*ch2.Af, false)){
+					cout << "NOt reaching branch due to pipe size difference"<<endl;
+					A_temp = A1;
+					Q_now = Q1;
+					A_temp1 = A0;
+					Q1_temp = Q0;
+					A_temp2 = A2; 
+					Q2_temp = Q2;
+					ch0.numFluxHLL_K(A0,A_temp, Q0, Q_now, ch0.bfluxright, true, true, ch0.N+1);
+					ch1.numFluxHLL_K(A_temp1, A1, Q1_temp, Q1, ch1.bfluxleft, true, true, 0);
+					ch2.numFluxHLL_K(A_temp2, A2, Q2_temp, Q2, ch2.bfluxleft, true, true, 0);
+				}
+				else{ 
+					// All the following means that it implements the triple-junciton problem
+					cout << "Implementation Dividing T1"<<endl;
+
+					// Calculate Boundary Fluxes @ time step n-1
+					Q_past = Q1_temp_past + Q2_temp_past;
+					
+					// We always assume that the diamater for pipe 0 and pipe 1 are the same
+					// A_temp_past1 = (ch1.w == ch0.w ? A_temp_past: Aofpbar1(A_temp_past));
+					A_temp_past2 = (ch2.w == ch0.w ? A_temp_past: JunAtransfer(Q2_past, ch0, Q2_temp_past/A_temp_past, ch2, A_temp_past));
+					// if (A_temp_past2 < A2) A_temp_past2 = A2;
+						
+					// // ch0.numFlux(A0_past,A_temp_past, Q0_past, Q_past, ch0.bfluxright, true, true);
+					// // ch1.numFlux(A_temp_past1,A1_past, Q1_temp_past, Q1_past, ch1.bfluxleft, true, true);		
+					// // ch2.numFlux(A_temp_past2,A2_past, Q2_temp_past, Q2_past, ch2.bfluxleft, true, true);
+					// ch0.numFluxHLL_K(A0_past,A_temp_past, Q0_past, Q_past, ch0.bfluxright, true, true, ch0.N+1);
+					// ch1.numFluxHLL_K(A_temp_past1,A1_past, Q1_temp_past, Q1_past, ch1.bfluxleft, true, true,0);		
+					// ch2.numFluxHLL_K(A_temp_past2,A2_past, Q2_temp_past, Q2_past, ch2.bfluxleft, true, true,0);
+
+					// Qin = ch0.bfluxright[0];
+					// Qout1 = ch1.bfluxleft[0];
+					// Qout2 = ch2.bfluxleft[0];
+
+					// Ain = getAstar(ch0, ch0.N+1);
+					// Aout1 = getAstar(ch1, 0);
+					// Aout2 = getAstar(ch2,0);
+
+					// Min = ch0.bfluxright[1];
+					// Mout1 = ch1.bfluxleft[1];
+
+					/*
+						Very Important!! Decide the junction type
+						which pipe is inflow , which pipe is outflow,
+						Mar 5th, 2017
+						
+					*/
+					if (Q0>0 && Q1 >0 && Q2>0) junctype = 9111;   //   "0->1,2", 1 means postive, 0 means negative
+					if (Q0<=0 && Q1 <=0 && Q2>0) junctype = 9001;   //   "1->0,2"
+					if (Q0<=0 && Q1 <=0 && Q2<=0) junctype = 9000;    //   "1,2->0"
+					if (Q0>0 && Q1 >0 && Q2<=0) junctype = 9110;    //   "0,2->1"
+
+					// A_temp = (Qin - Qout1 - Qout2)*dt/L +A_temp_past;
+					A_temp = (Q0 - Q1 - Q2)*dt/L + A_temp_past;
+					
+					if (A_temp < A_area_critical ){
+						cout << "Resign A_temp value due to negative"<<endl;
+						A_temp = min(min(A0, A1),A2);
+					}
+					cout<<"get A_temp: "<<A_temp<<endl;
+						// old solution of numFlux
+					// ch0.numFlux(A0,A_temp, Q0, Q_now, ch0.bfluxright, true, true);
+					// ch1.numFlux(A_temp1,A1, Q1_temp, Q1, ch1.bfluxleft, true, true);
+					// ch2.numFlux(A_temp2,A2, Q2_temp, Q2, ch2.bfluxleft, true, true);
+					cout << "Current Junction Type: " <<junctype<<endl;
+					switch(junctype)
+					{
+						// Normal dividing flow 
+						case 9111:
+							beta_m  = 0.9;
+							beta_b  = 0.64*pow(ch2.w/ch0.w, 2);   
+							km = 0.25e-3;	
+							kb = 4.2e-3*pow(ch2.w/ch0.w, 1.5);    
+							break;
+						// reversed dividing flow
+						case 9001:
+							beta_m  = 0.9;
+							beta_b  = 0.26*pow(ch2.w/ch0.w, 2);   // Not tuned, just assumed to be right, you may check if want
+							km = 0.25e-3; 
+							kb = 4.2e-3*pow(ch2.w/ch0.w, 1.5);    
+							break;
+						// reversed combining flow
+						case 9000:
+							beta_m  = 0.5; 
+							beta_b  = 0.26*pow(ch2.w/ch0.w, 1);   
+							km = 0.25e-3;	
+							kb = 4.2e-3*pow(ch2.w/ch0.w, 1);    
+							break;
+						// normal combining flow
+						case 9110:
+							beta_m  = 0.5; 
+							beta_b  = 0.26*pow(ch2.w/ch0.w, 1);   
+							km = 0.25e-3;   	
+							kb = 4.2e-3*pow(ch2.w/ch0.w, 1);    
+							break;
+						default:
+							cout << "Wow we missed this scenario"<< endl;  // This is to be developed
+							beta_m  = 0.7;   // averaged over the two beta_m
+							beta_b  = 0.45*pow(ch2.w/ch0.w, 1.5); ;   // averaged over the two beta_b
+							km = 0.25e-3;	
+							kb = 4.2e-3*pow(ch2.w/ch0.w, 1.25);   // averaged over the two kb 
+					}	
+
+					v1_temp_past = Q1_temp_past/A_temp_past;
+					v2_temp_past = Q2_temp_past/A_temp_past2;
+
+					Q1_temp = (ch0.Eta(A0, true) - ch1.Eta(A1, true) + pow(Q0,2)/A0 - pow(Q1,2)/A1 - Q2*(beta_m*v1_temp_past + beta_b*v2_temp_past))*dt/L + Q1_temp_past;
+					// Q1_temp = (Min - Mout1 - Qout2*(beta_m*v1_temp_past + beta_b*v2_temp_past))*dt/L + Q1_temp_past;
+					// Q1_temp = (Min - Mout1 - Q2*(beta_m*v1_temp_past + beta_b*v2_temp_past))*dt/L + Q1_temp_past;
+					cout << "get Q1_temp:"<< Q1_temp<<endl;
+
+					z0_past = ch0.HofA(A0, true)-ch0.Eta(A0, true)/G/A0;
+					z1_past = ch1.HofA(A1, true)-ch1.Eta(A1, true)/G/A1;
+					z2_past = ch2.HofA(A2, true)-ch2.Eta(A2, true)/G/A2;
+					z_top_past = ch0.HofA(A_temp_past, true);
+					z_top = ch0.HofA(A_temp, true);
+					z_temp_past = ch0.HofA(A_temp_past, true) - ch0.Eta(A_temp_past, true)/G/A_temp_past;
+					z_temp = ch0.HofA(A_temp, true) - ch0.Eta(A_temp, true)/G/A_temp;
+
+					// E0_past = Qin*( pow(Q0/A0,2)/2/G +  z0_past + ch0.Eta(A0, true)/G/A0);
+					// E1_past = -Qout1*( pow(Q1/A1,2)/2/G + z1_past + ch1.Eta(A1, true)/G/A1);
+					// E2_past = -Qout2*( pow(Q2/A2,2)/2/G + z2_past + ch2.Eta(A2, true)/G/A2 );
+					// Results are similar to the equation above
+					E0_past =  Q0*( pow(Q0/A0,2)/2/G + z0_past + ch0.Eta(A0, true)/G/A0);
+					E1_past = -Q1*( pow(Q1/A1,2)/2/G + z1_past + ch1.Eta(A1, true)/G/A1);
+					E2_past = -Q2*( pow(Q2/A2,2)/2/G + z2_past + ch2.Eta(A2, true)/G/A2);
+
+
+					A_temp2 =  (ch2.w == ch0.w ? A_temp: JunAtransfer(Q2, ch0, Q2_temp_past/A_temp_past, ch2, A_temp));
+					// if (A_temp2 < A2) A_temp2 = A2; 
+
+					if (A_temp > ch0.At){
+						E_top_past = 0;
+					}
+					else{
+						E_top_past = ( pow(Q1_temp_past,2)/2/G/pow(A_temp_past,2) + pow(Q2_temp_past,2)/2/G/pow(A_temp_past2,2)+ 
+						z_top_past )*(A_temp-A_temp_past)*L/dt;
+					}
+					
+					E_temp_past = A_temp_past*L*( pow(Q1_temp_past,2)/2/G/pow(A_temp_past,2) + pow(Q2_temp_past,2)/2/G/pow(A_temp_past2,2)+ 
+						 z_temp_past); 
+					
+					Q2_temp1 = (((E0_past + E1_past + E2_past + E_top_past)*dt + E_temp_past)/A_temp/L 
+					 	- z_temp - (1 + km)*pow(Q1_temp,2)/(2*G*pow(A_temp,2))  )*2*G*pow(A_temp2,2)/(1+kb); 		
+					if (Q2_temp1<0){
+						Q2_temp = Q2/fabs(Q2)*1e-10;
+					}
+					else{
+						Q2_temp = Q2/fabs(Q2)*sqrt(Q2_temp1);
+					}
+					cout << "get Q2_temp1, Q2_temp: "<<Q2_temp1 << ", "<< Q2_temp << endl;
+
+	   				Q_now = Q1_temp + Q2_temp;
+	   				
+					// Assume that the main pipe always has the same size
+					if (ch0.w == ch1.w){
+						A_temp1 = A_temp; 
+					} 
+					else{
+						cout<< "Oops, you main pipe size changes after the junction. We do not have abilities to handle it."<<endl;
+						abort();
+					}
+					// A_temp2 = (ch2.w == ch0.w ? A_temp: Aofpbar2(A_temp)); // if the branch pipe has a different diameter
+	   				// A_temp2 =  (ch2.w == ch0.w ? A_temp: JunAtransfer(Q2, ch0, Q2_temp/A_temp, ch2, A_temp));
+	   				// if (A_temp2 < A2) A_temp2 = A2; 
+
+					ch0.numFluxHLL_K(A0,A_temp, Q0, Q_now, ch0.bfluxright, true, true, ch0.N+1);
+					// ch1.numFluxHLL_K(A_temp1, A1, Q1_temp, Q1, ch1.bfluxleft, true, true, 0);
+					// cout << "A_temp2, Q2_temp are:"<< A_temp2 << ", "<< Q2_temp<<endl;
+					// cout << "A2, Q2 are:"<< A2 << ", "<< Q2<<endl;
+					// ch2.numFluxHLL_K(A_temp2, A2, Q2_temp, Q2, ch2.bfluxleft, true, true, 0);
+
+					double Aext1, Qext1;
+					if (A1 > (1. + allow_coef*pow(ch2.w/ch0.w,1))*A_temp1 && A1 > ch1.Af*1.01e-2  ){
+						cout << "should have reversed flow in pipe 1"<<endl;
+						// A_temp = A1; // makes the code unstable
+						Aext1 = A1;
+						// Qext1 = Q1_temp;
+						Qext1 = Q1/fabs(Q1)*1e-10;;
+
+						// Aext1 = A1;
+						// double inside = ch1.HofA(A_temp2,true) + pow(Q1_temp/A_temp1,2) - ch1.HofA(Aext1, true);
+						// Qext1 = (inside >= 0? sqrt(inside)*Aext1: Q1/fabs(Q1)*1e-10);
+					}
+					else{
+						// cout << "normal condition"<<endl;
+						Aext1 = A_temp1;
+						Qext1 = Q1_temp;
+					}
+					// cout << "channel 1 Aext1, Qext1:"<<Aext1<<", "<<Qext1<<endl;
+					ch1.numFluxHLL_K(Aext1, A1, Qext1, Q1, ch1.bfluxleft, true, true, 0);
+					
+
+
+					double Aext2, Qext2;
+					if (A2 > (1. + allow_coef*pow(ch1.w/ch0.w,1))*A_temp2 && A2 > ch2.Af*1.01e-2){  
+						cout << "should have reversed flow in pipe 2"<<endl;
+						Aext2 = A2;
+						Qext2 = Q2/fabs(Q2)*1e-10;
+						// Aext2 = A2;
+						// double inside = ch2.HofA(A_temp2,true) + pow(Q2_temp/A_temp2,2) - ch2.HofA(Aext2, true);
+						// Qext2 = (inside >= 0? sqrt(inside)*Aext2: Q2/fabs(Q2)*1e-10);
+					}
+					else{
+						// cout << "normal condition"<<endl;
+						Aext2 = A_temp2;
+						Qext2 = Q2_temp;
+					}
+					cout << "channel 2 Aext2, Qext2:"<<Aext2<<", "<<Qext2<<endl;
+					ch2.numFluxHLL_K(Aext2, A2, Qext2, Q2, ch2.bfluxleft, true, true, 0);	
+
+					// New added lines
+					Q1_temp = Qext1;
+					Q2_temp = Qext2;	
+				}				
+			}
+			// Store junction value 		
+			ch0.q_hist[ch0.idx_t(0,ch0.N+1,ch0.n)] = A_temp; // final grid of channel 0: store A* value
+			ch1.q_hist[ch1.idx_t(1,0,ch1.n)] =  Q1_temp;     // first grid of channel 1: store Qx
+			ch2.q_hist[ch2.idx_t(1,0,ch2.n)] =  Q2_temp;	 // first grid of channel 2: store Qy
+
+			// Store Junction flux
+			ch0.q_hist[ch0.idx_t(1,ch0.N+1,ch0.n)] =  ch0.bfluxright[0];
+			ch1.q_hist[ch1.idx_t(0,0,ch1.n)] =  ch1.bfluxleft[0];
+			ch2.q_hist[ch2.idx_t(0,0,ch2.n)] =  ch2.bfluxleft[0];
+		}// Close bracket for if T1
+		// cout << "End T1 algorithm"<<endl;
 	}
-    else if( (whichend[0] ==0&& whichend[1] ==1 &&whichend[2] ==1))
+
+
+
+
+
+
+
+
+
+
+
+
+
+	else if(whichend[0]==1 &&whichend[1] == 0 &&whichend[2] ==1)
 	{
 
-		Abar[0] = .5*(ch1.q[ch1.idx(0,ch1.N-1)]+ch2.q[ch2.idx(0,ch2.N-1)]);
-		Qbar[0] = .5*(ch1.q[ch1.idx(1,ch1.N-1)]+ch2.q[ch2.idx(1,ch2.N-1)]);
-		Abar[1] = .5*(ch0.q[ch0.idx(0,0)]+ch2.q[ch2.idx(0,ch2.N-1)]);
-		Qbar[1] = .5*(ch0.q[ch0.idx(1,0)]-ch2.q[ch2.idx(1,ch2.N-1)]);
-		Abar[2] = .5*(ch0.q[ch0.idx(0,0)]+ch1.q[ch1.idx(0,ch1.N-1)]);	
-		Qbar[2] = .5*(ch0.q[ch0.idx(1,0)]-ch1.q[ch1.idx(1,ch1.N-1)]);
-	//solve fake Reimann problems between each pair
-	//0-1 is easy
-		j2_01.boundaryFluxes(dt);
-		flux0[0] =  p01*ch0.bfluxleft[0];
-		flux0[1] =  p01*ch0.bfluxleft[1];
-		flux1[0] =  p10*ch1.bfluxright[0];
-		flux1[1] =  p10*ch1.bfluxright[1];
-	//1-2 is a pain in the neck	
-		ch2.q[ch2.idx(1,ch2.N-1)]= -ch2.q[ch2.idx(1,ch2.N-1)];
-		j2_12.boundaryFluxes(dt);	
-		ch2.q[ch2.idx(1,ch2.N-1)]= -ch2.q[ch2.idx(1,ch2.N-1)];
-		flux1[0] += p12*ch1.bfluxright[0];
-		flux1[1] += p12*ch1.bfluxright[1];
-		flux2[0] =  p21*ch2.bfluxright[0];
-		flux2[1] =  p21*ch2.bfluxright[1];
+		//My own algorithm begins
+		//**************************************************
+		
+		// time step n-1
+		double A0_past, Q0_past, A2_past, Q2_past, A1_past, Q1_past;
+		A0_past = ch0.q_hist[ch0.idx_t(0,ch0.N,ch0.n-1)];
+		Q0_past = ch0.q_hist[ch0.idx_t(1,ch0.N,ch0.n-1)];
+		A1_past = ch1.q_hist[ch1.idx_t(0,1,ch0.n-1)];
+		Q1_past = ch1.q_hist[ch1.idx_t(1,1,ch0.n-1)];
+		A2_past = ch2.q_hist[ch2.idx_t(0,ch2.N,ch0.n-1)];
+		Q2_past = ch2.q_hist[ch2.idx_t(1,ch2.N,ch0.n-1)];
+		double v0_past = (A0_past>1e-5 ?Q0_past/A0_past :0. );
+		double v1_past = (A1_past>1e-5 ?Q1_past/A1_past :0. );
+		double v2_past = (A2_past>1e-5 ?Q2_past/A2_past :0. );
+		double A_temp_past, Q1_temp_past, Q2_temp_past;
+		A_temp_past = ch0.q_hist[ch0.idx_t(0,ch0.N+1,ch0.n-1)];
+		Q1_temp_past = ch1.q_hist[ch1.idx_t(1,0,ch1.n-1)];
+		Q2_temp_past = ch2.q_hist[ch2.idx_t(1,ch2.N+1,ch2.n-1)];
+		double vx_temp_past = (A_temp_past>1e-5 ?Q1_temp_past/A_temp_past:0.);
 
-		ch1.q[ch1.idx(1,ch1.N-1)]= -ch1.q[ch1.idx(1,ch1.N-1)];
-		j2_21.boundaryFluxes(dt);
-		ch1.q[ch1.idx(1,ch1.N-1)]= -ch1.q[ch1.idx(1,ch1.N-1)];
-		flux2[0] = p21*ch2.bfluxright[0];
-		flux2[1] = p21*ch2.bfluxright[1];
-	
 
-		j2_20.boundaryFluxes(dt);
-		flux0[0] += p02*ch0.bfluxleft[0];
-		flux0[1] += p02*ch0.bfluxleft[1];
-		flux2[0] += p20*ch2.bfluxright[0];
-		flux2[1] += p20*ch2.bfluxright[1];
+		//time step n
+		double A0, Q0, A1, Q1, A2, Q2; 
+		double A_temp, Q1_temp, Q2_temp;
+		A0 = ch0.q[ch0.idx(0,ch0.N-1)];
+		Q0 = ch0.q[ch0.idx(1,ch0.N-1)];
+		A1 = ch1.q[ch1.idx(0,0)];
+		Q1 = ch1.q[ch1.idx(1,0)];
+		A2 = ch2.q[ch2.idx(0,ch2.N-1)];
+		Q2 = ch2.q[ch2.idx(1,ch2.N-1)];
+		double v0 = (A0>ch0.At*1e-4 ?Q0/A0 :0. );
+		double v1 = (A1>ch1.At*1e-4 ?Q1/A1 :0. );
+		double v2 = (A2>ch2.At*1e-4 ?Q2/A2 :0. );
+		double A_temp1, A_temp2;   // Parameters that to change A_temp to adpat to pipe of different sizes connected to the junction
+		//beta = (Q0 >0 ? 0.7+0.28*Q1/Q0: 0.);
+		//double x1 = Q1/Q0;
+		//beta = (Q0 >0 ? -0.1997*x1*x1 +0.5439*x1 + 0.6537: 0.85);
 
-		//set all the fluxes properly
-		ch0.bfluxleft[0] = flux0[0];
-		ch0.bfluxleft[1] = flux0[1];
-		ch1.bfluxright[0] = flux1[0];
-		ch1.bfluxright[1] = flux1[1];
-		ch2.bfluxright[0] = flux2[0];
-		ch2.bfluxright[1] = flux2[1];
-/*        printf("triple junction fluxes are\n");
-        printf("channel 0: [%f  %f]\n",flux0[0], flux0[1]);
-        printf("channel 1: [%f  %f]\n",flux1[0], flux1[1]);
-        printf("channel 2: [%f  %f]\n",flux2[0], flux2[1]);*/
-		//store away the info
-		ch0.q_hist[ch0.idx_t(0,0,ch0.n)] = Abar[0]; 
-		ch0.q_hist[ch0.idx_t(1,0,ch0.n)] = Qbar[0];
-		ch1.q_hist[ch1.idx_t(0,ch1.N+1,ch1.n)] =  Abar[1];
-		ch1.q_hist[ch1.idx_t(1,ch1.N+1,ch1.n)] =  Qbar[1];
-		ch2.q_hist[ch2.idx_t(0,ch2.N+1,ch2.n)] =  Abar[2];
-		ch2.q_hist[ch2.idx_t(1,ch2.N+1,ch2.n)] =  Qbar[2];
+		/********************************************************
+			My updated Algorithm starts
+		*****************************************d\****************/
+		cout << "A0, Q0 is: "<< A0 << ", "<< Q0<<endl;
+		cout << "A1, Q1 is: "<< A1 << ", "<< Q1<<endl;
+		cout << "A2, Q2 is: "<< A2 << ", "<< Q2<<endl;
 
-    }
+		Q2_past = pow(-1, whichend[2])*Q2_past;
+		Q2 = pow(-1, whichend[2])*Q2;
+		cout << "reversed A2, Q2 is: "<< A2 << ", "<< Q2<<endl;
+
+		bool T1 = true;
+
+		if (T1)
+		{
+
+			/*	
+				Nomral T Dividing Connection
+				Pay attention: channel 0 must be inflow and right connected, channel 1 must be horizontal, channel 2 must be vertical
+				Both 1 and 2 should be left connected, These should be careful when establish the model
+				This routine is only designed for T junction
+				Other junction needs to be further developed
+			*/
+			
+			cout<<"T dividing situation"<<endl;
+			double beta_m, beta_b;
+			double Q_now;
+			double km = 0., kb = 0.;
+			int junctype = 0;
+			double Q2_temp1;
+			double L = ch0.dx;
+			double Qin, Qout1, Qout2; 
+			double A_temp_past1, A_temp_past2;
+			double Q_past;
+
+			// For new trial, Mar 10 2017
+			double v1_temp_past, v2_temp_past;
+			double E0_past, E1_past, E2_past, E_loss_past, E_temp_past, E_top_past;
+			double z0_past, z1_past, z2_past, z_temp_past, z_top_past, z_temp, z_top;
+			double Ain, Aout1, Aout2;
+			double Min, Mout1;
+
+
+			//double A_jun2, A_jun2_past;
+			if (v0_past ==0 || v0==0){
+				cout<<"zero v0"<<endl;
+				A_temp = A1;
+				Q_now = Q1;
+				A_temp1 = A0;
+				Q1_temp = Q0;
+				A_temp2 = A2;
+				Q2_temp = Q2;
+				
+			}
+			else{
+				if (ch0.HofA(A0, false) - ch0.w/2 + ch2.w/2 <=0){
+					cout << "NOt reaching branch due to pipe size difference"<<endl;
+					A_temp = A1;
+					Q_now = Q1;
+					A_temp1 = A0;
+					Q1_temp = Q0;
+					A_temp2 = A2; 
+					Q2_temp = Q2;
+					ch0.numFluxHLL_K(A0,A_temp, Q0, Q_now, ch0.bfluxright, true, true, ch0.N+1);
+					ch1.numFluxHLL_K(A_temp1, A1, Q1_temp, Q1, ch1.bfluxleft, true, true, 0);
+					ch2.numFluxHLL_K(A_temp2, A2, Q2_temp, Q2, ch2.bfluxleft, true, true, 0);
+				}
+				else{ 
+					// All the following means that it implements the triple-junciton problem
+					cout << "Implementation Dividing T1"<<endl;
+
+					// Calculate Boundary Fluxes @ time step n-1
+					Q_past = Q1_temp_past + Q2_temp_past;
+					
+					// We always assume that the diamater for pipe 0 and pipe 1 are the same
+					A_temp_past1 = (ch1.w == ch0.w ? A_temp_past: Aofpbar1(A_temp_past));
+					A_temp_past2 = (ch2.w == ch0.w ? A_temp_past: JunAtransfer(Q2_past, ch0, Q2_temp_past/A_temp_past, ch2, A_temp_past));
+						
+					// ch0.numFlux(A0_past,A_temp_past, Q0_past, Q_past, ch0.bfluxright, true, true);
+					// ch1.numFlux(A_temp_past1,A1_past, Q1_temp_past, Q1_past, ch1.bfluxleft, true, true);		
+					// ch2.numFlux(A_temp_past2,A2_past, Q2_temp_past, Q2_past, ch2.bfluxleft, true, true);
+
+
+
+					// ch0.numFluxHLL_K(A0_past,A_temp_past, Q0_past, Q_past, ch0.bfluxright, true, true, ch0.N+1);
+					// ch1.numFluxHLL_K(A_temp_past1,A1_past, Q1_temp_past, Q1_past, ch1.bfluxleft, true, true,0);		
+					// ch2.numFluxHLL_K(A2_past, A_temp_past2, pow(-1, whichend[2])*Q2_past, pow(-1, whichend[2])*Q2_temp_past,  ch2.bfluxright, true, true, ch2.N+1);
+
+					// Qin = ch0.bfluxright[0];
+					// Qout1 = ch1.bfluxleft[0];
+					// Qout2 = pow(-1, whichend[2])*ch2.bfluxright[0];
+
+					// Ain = getAstar(ch0, ch0.N+1);
+					// Aout1 = getAstar(ch1, 0);
+					// Aout2 = getAstar(ch2,ch2.N+1);
+
+					// Min = ch0.bfluxright[1];
+					// Mout1 = ch1.bfluxleft[1];
+
+					/*
+						Very Important!! Decide the junction type
+						which pipe is inflow , which pipe is outflow,
+						Mar 5th, 2017
+						
+					*/
+					if (Q0>0 && Q1 >0 && Q2>0) junctype = 9111;   //   "0->1,2", 
+					if (Q0<=0 && Q1 <=0 && Q2>0) junctype = 9001;   //   "1->0,2"
+					if (Q0<=0 && Q1 <=0 && Q2<=0) junctype = 9000;    //   "1,2->0"
+					if (Q0>0 && Q1 >0 && Q2<=0) junctype = 9110;    //   "0,2->1"
+
+					// A_temp = (Qin - Qout1 - Qout2)*dt/L +A_temp_past;
+					A_temp = (Q0 - Q1 - Q2)*dt/L + A_temp_past;
+					
+					if (A_temp < A_area_critical ){
+						cout << "Resign A_temp value due to negative"<<endl;
+						A_temp = min(min(A0, A1),A2);
+					}
+					cout<<"get A_temp: "<<A_temp<<endl;
+					// old solution of numFlux
+					// ch0.numFlux(A0,A_temp, Q0, Q_now, ch0.bfluxright, true, true);
+					// ch1.numFlux(A_temp1,A1, Q1_temp, Q1, ch1.bfluxleft, true, true);
+					// ch2.numFlux(A_temp2,A2, Q2_temp, Q2, ch2.bfluxleft, true, true);
+					cout << "Current Junction Type: " <<junctype<<endl;
+					switch(junctype)
+					{
+						// Normal dividing flow 
+						case 9111:
+							beta_m  = 0.9;
+							beta_b  = 0.64*pow(ch2.w/ch0.w, 2);   
+							km = 0.25e-3;	
+							kb = 4.2e-3*pow(ch2.w/ch0.w, 1.5);    
+							break;
+						// reversed dividing flow
+						case 9001:
+							beta_m  = 0.9;
+							beta_b  = 0.26*pow(ch2.w/ch0.w, 2);   // Not tuned, just assumed to be right, you may check if want
+							km = 0.25e-3; 
+							kb = 4.2e-3*pow(ch2.w/ch0.w, 1.5);    
+							break;
+						// reversed combining flow
+						case 9000:
+							beta_m  = 0.5; 
+							beta_b  = 0.26*pow(ch2.w/ch0.w, 1);   
+							km = 0.25e-3;	
+							kb = 4.2e-3*pow(ch2.w/ch0.w, 1);    
+							break;
+						// normal combining flow
+						case 9110:
+							beta_m  = 0.5; 
+							beta_b  = 0.26*pow(ch2.w/ch0.w, 1);   
+							km = 0.25e-3;   	
+							kb = 4.2e-3*pow(ch2.w/ch0.w, 1);    
+							break;
+						default:
+							cout << "Wow we missed this scenario"<< endl;  // This is to be developed
+							beta_m  = 0.7;   // averaged over the two beta_m
+							beta_b  = 0.45*pow(ch2.w/ch0.w, 1.5); ;   // averaged over the two beta_b
+							km = 0.25e-3;	
+							kb = 4.2e-3*pow(ch2.w/ch0.w, 1.25);   // averaged over the two kb  
+					}	
+
+					v1_temp_past = Q1_temp_past/A_temp_past;
+
+					// v2_temp_past = Q2_temp_past/A_temp_past;
+					v2_temp_past = Q2_temp_past/A_temp_past;
+
+					Q1_temp = (ch0.Eta(A0, true) - ch1.Eta(A1, true) + pow(Q0,2)/A0 - pow(Q1,2)/A1 - Q2*(beta_m*v1_temp_past + beta_b*v2_temp_past))*dt/L + Q1_temp_past;
+					// Q1_temp = (Min - Mout1 - Qout2*(beta_m*v1_temp_past + beta_b*v2_temp_past))*dt/L + Q1_temp_past;
+					cout << "get Q1_temp:"<< Q1_temp<<endl;
+
+					z0_past = ch0.HofA(A0, true)-ch0.Eta(A0, true)/G/A0;
+					z1_past = ch1.HofA(A1, true)-ch1.Eta(A1, true)/G/A1;
+					z2_past = ch2.HofA(A2, true)-ch2.Eta(A2, true)/G/A2;
+					z_top_past = ch0.HofA(A_temp_past, true);
+					z_top = ch0.HofA(A_temp, true);
+					z_temp_past = ch0.HofA(A_temp_past, true) - ch0.Eta(A_temp_past, true)/G/A_temp_past;
+					z_temp = ch0.HofA(A_temp, true) - ch0.Eta(A_temp, true)/G/A_temp;
+
+					// E0_past = Qin*( pow(Q0/A0,2)/2/G +  z0_past + ch0.Eta(A0, true)/G/A0);
+					// E1_past = -Qout1*( pow(Q1/A1,2)/2/G + z1_past + ch1.Eta(A1, true)/G/A1);
+					// E2_past = -Qout2*( pow(Q2/A2,2)/2/G + z2_past + ch2.Eta(A2, true)/G/A2 );
+					// Results are similar to the equation above
+					E0_past =  Q0*( pow(Q0/A0,2)/2/G + z0_past + ch0.Eta(A0, true)/G/A0);
+					E1_past = -Q1*( pow(Q1/A1,2)/2/G + z1_past + ch1.Eta(A1, true)/G/A1);
+					E2_past = -Q2*( pow(Q2/A2,2)/2/G + z2_past + ch2.Eta(A2, true)/G/A2);
+
+
+					A_temp2 =  (ch2.w == ch0.w ? A_temp: JunAtransfer(Q2, ch0, Q2_temp_past/A_temp_past, ch2, A_temp));
+
+					if ( A_temp > ch0.At){
+						E_top_past = 0;
+					}
+					else{
+						E_top_past = ( pow(Q1_temp_past,2)/2/G/pow(A_temp_past,2) + pow(Q2_temp_past,2)/2/G/pow(A_temp_past,2)+ 
+						z_top_past )*(A_temp-A_temp_past)*L/dt;
+					}
+					
+					E_temp_past = A_temp_past*L*( pow(Q1_temp_past,2)/2/G/pow(A_temp_past,2) + pow(Q2_temp_past,2)/2/G/pow(A_temp_past,2)+ 
+						 z_temp_past); 
+					
+					Q2_temp1 = (((E0_past + E1_past + E2_past + E_top_past)*dt + E_temp_past)/A_temp/L 
+					 	- z_temp - (1 + km)*pow(Q1_temp,2)/(2*G*pow(A_temp,2))  )*2*G*pow(A_temp,2)/(1+kb); 		
+					if (Q2_temp1<0){
+						Q2_temp = Q2/fabs(Q2)*1e-10;
+					}
+					else{
+						Q2_temp = Q2/fabs(Q2)*sqrt(Q2_temp1);
+					}
+					cout << "get Q2_temp1, Q2_temp: "<<Q2_temp1 << ", "<< Q2_temp << endl;
+
+	   				Q_now = Q1_temp + Q2_temp;
+	   				
+					// Assume that the main pipe always has the same size
+					if (ch0.w == ch1.w){
+						A_temp1 = A_temp; 
+					} 
+					else{
+						cout<< "Oops, you main pipe size changes after the junction. We do not have abilities to handle it."<<endl;
+						abort();
+					}
+					// A_temp2 = (ch2.w == ch0.w ? A_temp: Aofpbar2(A_temp)); // if the branch pipe has a different diameter
+	   				A_temp2 =  (ch2.w == ch0.w ? A_temp: JunAtransfer(Q2, ch0, Q2_temp/A_temp, ch2, A_temp));
+
+					ch0.numFluxHLL_K(A0,A_temp, Q0, Q_now, ch0.bfluxright, true, true, ch0.N+1);
+					// ch1.numFluxHLL_K(A_temp1, A1, Q1_temp, Q1, ch1.bfluxleft, true, true, 0);
+					// ch2.numFluxHLL_K(A_temp2, A2, Q2_temp, Q2, ch2.bfluxleft, true, true, 0);
+
+
+					double Aext1, Qext1;
+					if (A1 > (1 + 0.04)*A_temp1 &&  A1 > ch1.Af*1e-2 ){  
+						cout << "should have reversed flow in pipe 1"<<endl;
+						// A_temp = A1; // makes the code unstable
+						Aext1 = A1;
+						// Qext1 = Q1_temp;
+						Qext1 = Q1/fabs(Q1)*1e-10;
+					}
+					else{
+						cout << "normal condition"<<endl;
+						Aext1 = A_temp1;
+						Qext1 = Q1_temp;
+					}
+					ch1.numFluxHLL_K(Aext1, A1, Qext1, Q1, ch1.bfluxleft, true, true, 0);
+					
+					double Aext2, Qext2;
+					if (A2 > (1 + 0.055)*A_temp2 && A2 > ch2.Af*1e-2 ){
+						cout << "should have reversed flow in pipe 2"<<endl;
+						// A_temp = A2;
+						// Aext2 = A2;
+						Qext2 = Q2/fabs(Q2)*1e-10;
+						Aext2 = A2;
+						// Qext2 = Q2_temp;
+					}
+					else{
+						cout << "normal condition"<<endl;
+						Aext2 = A_temp2;
+						Qext2 = Q2_temp;
+					}
+					ch2.numFluxHLL_K(A2, Aext2,  pow(-1, whichend[2])*Q2, pow(-1, whichend[2])*Qext2, ch2.bfluxright, true, true, ch2.N+1);
+
+					// Q1_temp = Qext1;
+					// Q2_temp = Qext2;
+				}
+			
+				// Store junction value 
+				ch0.q_hist[ch0.idx_t(0,ch0.N+1,ch0.n)] = A_temp; // final grid of channel 0: store A* value
+				ch1.q_hist[ch1.idx_t(1,0,ch1.n)] =  Q1_temp;     // first grid of channel 1: store Qx
+				ch2.q_hist[ch2.idx_t(1,ch2.N+1,ch2.n)] =  Q2_temp;	 // first grid of channel 2: store Qy
+
+				// Store Junction flux
+				ch0.q_hist[ch0.idx_t(1,ch0.N+1,ch0.n)] =  ch0.bfluxright[0];
+				ch1.q_hist[ch1.idx_t(0,0,ch1.n)] =  ch1.bfluxleft[0];
+				ch2.q_hist[ch2.idx_t(0,ch2.N+1,ch2.n)] =  ch2.bfluxright[0];
+			}
+		}// Close bracket for if T1
+		cout << "End T1 algorithm"<<endl;
+	}
+
+	// else if(whichend[0]==0 &&whichend[1] ==1 &&whichend[2] ==1)
+	// {
+
+	// 	//My own algorithm begins
+	// 	//**************************************************
+		
+
+	// 	// time step n-1
+	// 	double A0_past, Q0_past, A2_past, Q2_past, A1_past, Q1_past;
+	// 	A0_past = ch0.q_hist[ch0.idx_t(0,1,ch0.n-1)];
+	// 	Q0_past = ch0.q_hist[ch0.idx_t(1,1,ch0.n-1)];
+	// 	A1_past = ch1.q_hist[ch1.idx_t(0,ch1.N,ch0.n-1)];
+	// 	Q1_past = ch1.q_hist[ch1.idx_t(1,ch1.N,ch0.n-1)];
+	// 	A2_past = ch2.q_hist[ch2.idx_t(0,ch2.N,ch0.n-1)];
+	// 	Q2_past = ch2.q_hist[ch2.idx_t(1,ch2.N,ch0.n-1)];
+	// 	double v0_past = (A0_past>1e-5 ?Q0_past/A0_past :0. );
+	// 	double v1_past = (A1_past>1e-5 ?Q1_past/A1_past :0. );
+	// 	double v2_past = (A2_past>1e-5 ?Q2_past/A2_past :0. );
+	// 	double A_temp_past, Q1_temp_past, Q2_temp_past;
+	// 	A_temp_past = ch0.q_hist[ch0.idx_t(0,0,ch0.n-1)];
+	// 	Q1_temp_past = ch1.q_hist[ch1.idx_t(1,ch1.N+1,ch1.n-1)];
+	// 	Q2_temp_past = ch2.q_hist[ch2.idx_t(1,ch2.N+1,ch2.n-1)];
+	// 	double vx_temp_past = (A_temp_past>1e-5 ?Q1_temp_past/A_temp_past:0.);
+
+
+	// 	//time step n
+	// 	double A0, Q0, A1, Q1, A2, Q2; 
+	// 	double A_temp, Q1_temp, Q2_temp;
+	// 	A0 = ch0.q[ch0.idx(0,0)];
+	// 	Q0 = ch0.q[ch0.idx(1,0)];
+	// 	A1 = ch1.q[ch1.idx(0,ch1.N-1)];
+	// 	Q1 = ch1.q[ch1.idx(1,ch1.N-1)];
+	// 	A2 = ch2.q[ch2.idx(0,ch2.N-1)];
+	// 	Q2 = ch2.q[ch2.idx(1,ch2.N-1)];
+	// 	double v0 = (A0>ch0.At*1e-4 ?Q0/A0 :0. );
+	// 	double v1 = (A1>ch1.At*1e-4 ?Q1/A1 :0. );
+	// 	double v2 = (A2>ch2.At*1e-4 ?Q2/A2 :0. );
+	// 	double A_temp1, A_temp2;   // Parameters that to change A_temp to adpat to pipe of different sizes connected to the junction
+	// 	//beta = (Q0 >0 ? 0.7+0.28*Q1/Q0: 0.);
+	// 	//double x1 = Q1/Q0;
+	// 	//beta = (Q0 >0 ? -0.1997*x1*x1 +0.5439*x1 + 0.6537: 0.85);
+
+	// 	/********************************************************
+	// 		My updated Algorithm starts
+	// 	*****************************************d\****************/
+	// 	cout << "A0, Q0 is: "<< A0 << ", "<< Q0<<endl;
+	// 	cout << "A1, Q1 is: "<< A1 << ", "<< Q1<<endl;
+	// 	cout << "A2, Q2 is: "<< A2 << ", "<< Q2<<endl;
+
+	// 	bool T1 = true;
+
+	// 	if (T1)
+	// 	{
+
+	// 		/*	
+	// 			Nomral T Dividing Connection
+	// 			Pay attention: channel 0 must be inflow and right connected, channel 1 must be horizontal, channel 2 must be vertical
+	// 			Both 1 and 2 should be left connected, These should be careful when establish the model
+	// 			This routine is only designed for T junction
+	// 			Other junction needs to be further developed
+	// 		*/
+			
+	// 		cout<<"T dividing situation"<<endl;
+	// 		double beta_m, beta_b;
+	// 		double Q_now;
+	// 		double km = 0., kb = 0.;
+	// 		int junctype = 0;
+	// 		double Q2_temp1;
+	// 		double L = ch0.dx;
+	// 		double Qin, Qout1, Qout2; 
+	// 		double A_temp_past1, A_temp_past2;
+	// 		double Q_past;
+
+	// 		// For new trial, Mar 10 2017
+	// 		double v1_temp_past, v2_temp_past;
+	// 		double E0_past, E1_past, E2_past, E_loss_past, E_temp_past, E_top_past;
+	// 		double z0_past, z1_past, z2_past, z_temp_past, z_top_past, z_temp, z_top;
+	// 		double Ain, Aout1, Aout2;
+
+
+	// 		//double A_jun2, A_jun2_past;
+	// 		if (v0_past ==0 || v0==0){
+	// 			cout<<"zero v0"<<endl;
+	// 			A_temp = A1;
+	// 			Q_now = Q1;
+	// 			A_temp1 = A0;
+	// 			Q1_temp = Q0;
+	// 			A_temp2 = A2;
+	// 			Q2_temp = Q2;
+	// 			//A_temp1 = (ch1.w == ch0.w ? A_temp: Aofpbar1(A_temp));
+	// 			//A_temp2 = (ch2.w == ch0.w ? A_temp: Aofpbar2(A_temp));
+	// 		}
+	// 		else{
+	// 			if (ch0.HofA(A0, false) - ch0.w/2 + ch2.w/2 <=0){
+	// 				cout << "NOt reaching branch due to pipe size difference"<<endl;
+	// 				A_temp = A1;
+	// 				Q_now = Q1;
+	// 				A_temp1 = A0;
+	// 				Q1_temp = Q0;
+	// 				A_temp2 = A2; 
+	// 				Q2_temp = Q2;
+	// 			}
+	// 			else{ 
+	// 				// All the following means that it implements the triple-junciton problem
+	// 				cout << "Implementation Dividing T1"<<endl;
+
+	// 				// Calculate Boundary Fluxes @ time step n-1
+	// 				Q_past = Q1_temp_past + Q2_temp_past;
+					
+	// 				// We always assume that the diamater for pipe 0 and pipe 1 are the same
+	// 				A_temp_past1 = (ch1.w == ch0.w ? A_temp_past: Aofpbar1(A_temp_past));
+	// 				A_temp_past2 = (ch2.w == ch0.w ? A_temp_past: JunAtransfer(Q2_past, ch0, Q2_temp_past/A_temp_past, ch2, A_temp_past));
+						
+	// 				// ch0.numFlux(A0_past,A_temp_past, Q0_past, Q_past, ch0.bfluxright, true, true);
+	// 				// ch1.numFlux(A_temp_past1,A1_past, Q1_temp_past, Q1_past, ch1.bfluxleft, true, true);		
+	// 				// ch2.numFlux(A_temp_past2,A2_past, Q2_temp_past, Q2_past, ch2.bfluxleft, true, true);
+					
+	// 				ch0.numFluxHLL_K(A_temp_past, A0_past, Q_past, Q0_past,  ch0.bfluxleft, true, true, 0);
+	// 				ch1.numFluxHLL_K(A1_past, A_temp_past1, Q1_past, Q1_temp_past,  ch1.bfluxright, true, true,ch1.N+1);		
+	// 				ch2.numFluxHLL_K(A2_past, A_temp_past2, Q2_past, Q2_temp_past,  ch2.bfluxright, true, true,ch2.N+1);
+
+	// 				// Qin = ch0.bfluxleft[0];
+	// 				// Qout1 = ch1.bfluxright[0];
+	// 				// Qout2 = ch2.bfluxleft[0];
+
+	// 				// Ain = getAstar(ch0, ch0.N+1);
+	// 				// Aout1 = getAstar(ch1, 0);
+	// 				// Aout2 = getAstar(ch2,0);
+
+	// 				/*
+	// 					Very Important!! Decide the junction type
+	// 					which pipe is inflow , which pipe is outflow,
+	// 					Mar 5th, 2017
+						
+	// 				*/
+	// 				if (Q0 <= 0 && Q1 <= 0 && Q2 <= 0) junctype = 9111;   //   "0->1,2", 1 means postive, 0 means negative
+	// 				if (Q0 > 0 && Q1 > 0 && Q2 <= 0) junctype = 9001;   //   "1->0,2"
+	// 				if (Q0 > 0 && Q1 > 0 && Q2 > 0) junctype = 9000;    //   "1,2->0"
+	// 				if (Q0 <= 0 && Q1 <= 0 && Q2 > 0) junctype = 9110;    //   "0,2->1"
+
+	// 				// A_temp = (Qin - Qout1 - Qout2)*dt/L +A_temp_past;
+	// 				A_temp = (Q0 - Q1 - Q2)*dt/L + A_temp_past;
+					
+	// 				if (A_temp < A_area_critical ){
+	// 					cout << "Resign A_temp value due to negative"<<endl;
+	// 					A_temp = min(min(A0, A1),A2);
+	// 				}
+	// 				cout<<"get A_temp: "<<A_temp<<endl;
+	// 			}
+			
+				
+
+	// 			// old solution of numFlux
+	// 			// ch0.numFlux(A0,A_temp, Q0, Q_now, ch0.bfluxright, true, true);
+	// 			// ch1.numFlux(A_temp1,A1, Q1_temp, Q1, ch1.bfluxleft, true, true);
+	// 			// ch2.numFlux(A_temp2,A2, Q2_temp, Q2, ch2.bfluxleft, true, true);
+	// 			cout << "Current Junction Type: " <<junctype<<endl;
+	// 			switch(junctype)
+	// 			{
+	// 				// Normal dividing flow 
+	// 				case 9111:
+	// 					beta_m  = 0.9;
+	// 					beta_b  = 0.64;   
+	// 					km = 0.25e-3;	
+	// 					kb = 4.2e-3*pow(ch0.w/ch2.w,2.5);    
+	// 					break;
+	// 				// reversed dividing flow
+	// 				case 9001:
+	// 					beta_m  = 0.9;
+	// 					beta_b  = 0.26;   
+	// 					km = 0.25e-3; 
+	// 					kb = 4.2e-3*pow(ch0.w/ch2.w,2.5);    
+	// 					break;
+	// 				// reversed combining flow
+	// 				case 9000:
+	// 					beta_m  = 0.5*pow(ch2.w/ch0.w,1); 
+	// 					beta_b  = 0.26;   
+	// 					km = 0.25e-3;	
+	// 					kb = 4.2e-3*pow(ch0.w/ch2.w,3.0);    
+	// 					break;
+	// 				// normal combining flow
+	// 				case 9110:
+	// 					beta_m  = 0.5*pow(ch2.w/ch0.w,1); 
+	// 					beta_b  = 0.26;   
+	// 					km = 0.25e-3;	
+	// 					kb = 4.2e-3*pow(ch0.w/ch2.w,3.0);    
+	// 					break;
+	// 				default:
+	// 					cout << "Wow we missed this scenario"<< endl;
+	// 					beta_m  = 0.7;   // averaged over the two beta_m
+	// 					beta_b  = 0.45;   // averaged over the two beta_b
+	// 					km = 0.25e-3;	
+	// 					kb = 4.2e-3*pow(ch0.w/ch2.w,2.5);    
+	// 			}	
+
+	// 			v1_temp_past = Q1_temp_past/A_temp_past;
+
+	// 			// v2_temp_past = Q2_temp_past/A_temp_past;
+	// 			v2_temp_past = Q2_temp_past/A_temp_past;
+
+	// 			Q1_temp = (ch0.Eta(A0, true) - ch1.Eta(A1, true) + pow(Q0,2)/A0 - pow(Q1,2)/A1 - Q2*(beta_m*v1_temp_past + beta_b*v2_temp_past))*dt/L + Q1_temp_past;
+	// 			// Q1_temp = (Min - Mout1 - Q2*(beta_m*v1_temp_past + beta_b*v2_temp_past))*dt/L + Q1_temp_past;
+	// 			cout << "get Q1_temp:"<< Q1_temp<<endl;
+
+	// 			z0_past = ch0.HofA(A0, true)-ch0.Eta(A0, true)/G/A0;
+	// 			z1_past = ch1.HofA(A1, true)-ch1.Eta(A1, true)/G/A1;
+	// 			z2_past = ch2.HofA(A2, true)-ch2.Eta(A2, true)/G/A2;
+	// 			z_top_past = ch0.HofA(A_temp_past, true);
+	// 			z_top = ch0.HofA(A_temp, true);
+	// 			z_temp_past = ch0.HofA(A_temp_past, true) - ch0.Eta(A_temp_past, true)/G/A_temp_past;
+	// 			z_temp = ch0.HofA(A_temp, true) - ch0.Eta(A_temp, true)/G/A_temp;
+
+	// 			// E0_past = Qin*( pow(Q0/A0,2)/2/G +  z0_past + ch0.Eta(A0, true)/G/A0);
+	// 			// E1_past = -Qout1*( pow(Q1/A1,2)/2/G + z1_past + ch1.Eta(A1, true)/G/A1);
+	// 			// E2_past = -Qout2*( pow(Q2/A2,2)/2/G + z2_past + ch2.Eta(A2, true)/G/A2 );
+	// 			// Results are similar to the equation above
+	// 			E0_past =  Q0*( pow(Q0/A0,2)/2/G + z0_past + ch0.Eta(A0, true)/G/A0);
+	// 			E1_past = -Q1*( pow(Q1/A1,2)/2/G + z1_past + ch1.Eta(A1, true)/G/A1);
+	// 			E2_past = -Q2*( pow(Q2/A2,2)/2/G + z2_past + ch2.Eta(A2, true)/G/A2);
+
+
+	// 			A_temp2 =  (ch2.w == ch0.w ? A_temp: JunAtransfer(Q2, ch0, Q2_temp_past/A_temp_past, ch2, A_temp));
+
+	// 			if ( A_temp > ch0.At){
+	// 				E_top_past = 0;
+	// 			}
+	// 			else{
+	// 				E_top_past = ( pow(Q1_temp_past,2)/2/G/pow(A_temp_past,2) + pow(Q2_temp_past,2)/2/G/pow(A_temp_past,2)+ 
+	// 				z_top_past )*(A_temp-A_temp_past)*L/dt;
+	// 			}
+				
+	// 			E_temp_past = A_temp_past*L*( pow(Q1_temp_past,2)/2/G/pow(A_temp_past,2) + pow(Q2_temp_past,2)/2/G/pow(A_temp_past,2)+ 
+	// 				 z_temp_past); 
+				
+	// 			Q2_temp1 = (((E0_past + E1_past + E2_past + E_top_past)*dt + E_temp_past)/A_temp/L 
+	// 			 	- z_temp - (1 + km)*pow(Q1_temp,2)/(2*G*pow(A_temp,2))  )*2*G*pow(A_temp,2)/(1+kb); 		
+	// 			if (Q2_temp1<0){
+	// 				Q2_temp = Q2/fabs(Q2)*1e-10;
+	// 			}
+	// 			else{
+	// 				Q2_temp = Q2/fabs(Q2)*sqrt(Q2_temp1);
+	// 			}
+	// 			cout << "get Q2_temp1, Q2_temp: "<<Q2_temp1 << ", "<< Q2_temp << endl;
+
+ //   				Q_now = Q1_temp + Q2_temp;
+   				
+	// 			// Assume that the main pipe always has the same size
+	// 			if (ch0.w == ch1.w){
+	// 				A_temp1 = A_temp; 
+	// 			} 
+	// 			else{
+	// 				cout<< "Oops, you main pipe size changes after the junction. We do not have abilities to handle it."<<endl;
+	// 				abort();
+	// 			}
+	// 			// A_temp2 = (ch2.w == ch0.w ? A_temp: Aofpbar2(A_temp)); // if the branch pipe has a different diameter
+ //   				A_temp2 =  (ch2.w == ch0.w ? A_temp: JunAtransfer(Q2, ch0, Q2_temp/A_temp, ch2, A_temp));
+
+	// 			ch0.numFluxHLL_K(A_temp, A0, Q_now, Q0,  ch0.bfluxleft, true, true, 0);
+	// 			ch1.numFluxHLL_K(A1, A_temp1,  Q1, Q1_temp, ch1.bfluxright, true, true, ch1.N+1);
+	// 			ch2.numFluxHLL_K(A2, A_temp2, Q2, Q2_temp,  ch2.bfluxright, true, true, ch2.N+1);
+
+	// 			// Store junction value 
+	// 			ch0.q_hist[ch0.idx_t(0,0,ch0.n)] = A_temp; // final grid of channel 0: store A* value
+	// 			ch1.q_hist[ch1.idx_t(1,ch1.N+1,ch1.n)] =  Q1_temp;     // first grid of channel 1: store Qx
+	// 			ch2.q_hist[ch2.idx_t(1,ch2.N+1,ch2.n)] =  Q2_temp;	 // first grid of channel 2: store Qy
+
+	// 			// Store Junction flux
+	// 			ch0.q_hist[ch0.idx_t(1,0,ch0.n)] =  ch0.bfluxleft[0];
+	// 			ch1.q_hist[ch1.idx_t(0,ch1.N+1,ch1.n)] =  ch1.bfluxright[0];
+	// 			ch2.q_hist[ch2.idx_t(0,ch2.N+1,ch2.n)] =  ch2.bfluxright[0];
+	// 		}
+	// 	}// Close bracket for if T1
+	// 	cout << "End T1 algorithm"<<endl;
+
+	// 	/*********************************************************
+	// 		My updated ALgorithm ends
+	// 	*********************************************************/
+
+	// }
+
 	else{	
 		cout<<"End 0 = "<<whichend[0]<<" End 1 = "<< whichend[1]<<" End 2 = "<<whichend[2]<<endl;
 		cout<<"Have not implemented triple junctions for this configuration!Sorry!\n";
@@ -1968,7 +3631,7 @@ double Cpreiss::hofAold(double A)
 */
 //if you want to use negative slot...?
 double Cpreiss::fakehofA(double A, bool p)
-{
+{	p = false;
 	if (A>=At){p=true;}
 	double y;
 	if (p){y = yt+(A-At)/Ts;}	

@@ -115,38 +115,38 @@ Network* setupNetwork(char *finp, char *fconfig, int &M, int &Mi, double &T, int
 	double default_a = 12.; //pressure wave speed if not specified in INP file
 	ifstream file1(finp);
 	string stuff;
-	vector<int> jIDs, pIDs, conns;
+	vector<int> jIDs, pIDs, conns;    // Vector composed of integers only 
 	vector<double> lengths, diams, Mrs, S0s, xcoords, ycoords, elevs;
-	int jflag =0, pflag = 0, cflag =0;
-	int first;
-	while (getline(file1, stuff, '\n')) 
+	int jflag =0, pflag = 0, cflag =0;   //[JUNCTIONS],[PIPES],[COORDINATES] marker
+	int first; 
+	while (getline(file1, stuff, '\n')) // extract from file1 and store into stuff until find '\n'   
 	 {
 		 if (stuff[0]==';')
 			 continue;
 		 else{ 
 			if(jflag)
 			{      	
-				stringstream ss(stuff); // Insert the string into a stream
-				ss>>appendTo(jIDs)>>appendTo(elevs);
+				stringstream ss(stuff); // Insert the string into a stream (put stuff into ss)   
+				ss>>appendTo(jIDs)>>appendTo(elevs);    // [Both vectors, so append] put the first value of ss into jIDs, put the second value into elevs
 				if(stuff[0] =='[' && first==0){jflag =0;}
 				first = 0;
 			}
 			if(pflag)
 			{      	
 				stringstream ss(stuff);
-				ss>>appendTo(pIDs)>>appendTo(conns)>>appendTo(conns)>>appendTo(lengths)>>appendTo(diams)>>appendTo(Mrs);
+				ss>>appendTo(pIDs)>>appendTo(conns)>>appendTo(conns)>>appendTo(lengths)>>appendTo(diams)>>appendTo(Mrs);   // Does NOT consider minorloss or status!!!!!
 				if(stuff[0] =='[' && first==0){pflag =0;}
 				first = 0;
 			}
 			if (cflag)
 			{
-				int tmp;
+				int tmp;    //tmp is the node
 				stringstream ss(stuff);
 				ss>>tmp>>appendTo(xcoords)>>appendTo(ycoords);
 				if(stuff[0] =='[' && first==0){cflag =0;}
 				first = 0;
 			}
-			if(strncmp(stuff.c_str(), "[JUNCTIONS]", 11 )==0)
+			if(strncmp(stuff.c_str(), "[JUNCTIONS]", 11 )==0)   //
 			{	
 				jflag =1;
 				first = 1;
@@ -173,7 +173,7 @@ Network* setupNetwork(char *finp, char *fconfig, int &M, int &Mi, double &T, int
 	file1.close();
 	////
 	//figure out slopes from elevation info
-	for(int k = 0; k<pIDs.size(); k++)
+	for(int k = 0; k<pIDs.size(); k++)    //k means pipe
 	{	
 		int lk = find(jIDs.begin(), jIDs.end(), conns[2*k]   ) - jIDs.begin();
 		int rk = find(jIDs.begin(), jIDs.end(), conns[2*k+1] ) - jIDs.begin();

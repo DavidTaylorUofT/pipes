@@ -38,31 +38,31 @@ import os
 #I uncomment either the line below (1.1), (1.2), or (1.3)
 
 # (1.1) on my desktop:
-sys.path.append('/Users/lieba/anaconda/lib/python2.7/site-packages')
+#sys.path.append('/Users/lieba/anaconda/lib/python2.7/site-packages')
 # (1.2) on my macbook air
 #sys.path.append('/Users/anna/anaconda/lib/python2.7/site-packages')
 #sys.path.append('/usr/local/Cellar/gcc49/4.9.2_1/lib/gcc/4.9/gcc/x86_64-apple-darwin12.6.0/4.9.2/include-fixed')
 #(1.3)if on linux VM (replace [USERNAME] with your username. Verify this location with $ which python2.7)
-#sys.path.append('/home/[USERNAME]/anaconda/lib/python2.7/site-packages')
+sys.path.append('/home/xin/anaconda2/lib/python2.7/site-packages')
 
 
 ##!!!! below: you should specify compiler including path.
 # I uncomment either the lines below (2.1),(2.2), or (2.3)
 #(2.1) on my desktop
-os.environ["CC"] = "gcc-4.9"
-os.environ["CXX"] = "g++-4.9"
+#os.environ["CC"] = "gcc-4.9"
+#os.environ["CXX"] = "g++-4.9"
 #(2.2) on my macbook air
 #os.environ["CC"] = "/usr/local/bin/gcc-4.9"
 #os.environ["CXX"] = "/usr/local/bin/gcc-4.9"
 #(2.3) on a linux VM
-#os.environ["CC"] = "/usr/bin/gcc"
-#os.environ["CXX"] = "/usr/bin/g++"
+os.environ["CC"] = "/usr/bin/gcc-4.9"
+os.environ["CXX"] = "/usr/bin/g++-4.9"
 
 from distutils.core import setup, Extension
 from Cython.Build import cythonize
 from Cython.Distutils import build_ext
 import numpy
-
+print 'start'
 setup(ext_modules=cythonize(Extension(
     "allthethings",                                   # the extesion name
     sources=["allthethings.pyx", "channel.cpp", "setupandrun.cpp", "file_output.cc", "network.cpp", "levmar.cpp", "mp_mat.cpp",
@@ -82,7 +82,8 @@ setup(ext_modules=cythonize(Extension(
     extra_compile_args=['-fopenmp'],
     # so it can find, e.g. numpy/arrayobject.h
     # on orinoco
-    include_dirs=[numpy.get_include(),"/Users/lieba", "/usr/local/include"]   #so it can find, e.g. numpy/arrayobject.h
+    include_dirs=[numpy.get_include(),"/home/xin", "/usr/include"]   #so it can find, e.g. numpy/arrayobject.h
     # on macbook Air
     #include_dirs=[numpy.get_include(), "/Users/anna", "/usr/local/include"]
 )))
+print 'end'

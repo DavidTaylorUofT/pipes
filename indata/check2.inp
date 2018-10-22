@@ -1,0 +1,39 @@
+[TITLE]
+
+[JUNCTIONS]
+;ID              	Elev        	Demand      	Pattern
+ 0               	0         	0           	                	;
+ 1               	0         	0           	                	;
+ 2               	0         	0           	                	;
+ 3               	0         	0           	                	;
+ 4               	0         	0           	                	;
+ 5               	0         	0           	                	;
+ 6               	0         	0           	                	;
+ 7               	0         	0           	                	;
+ 8               	0         	0           	                	;
+
+
+[PIPES]
+;ID              	Node1           	Node2           	Length      	Diameter    	Roughness   	MinorLoss   	Status
+ 0               	0               	1               	100     	0.300           	0.007         	0           	Open  	;
+ 1               	1               	2               	100     	0.300           	0.007         	0           	Open  	;
+ 2               	2               	3               	100     	0.150           	0.007         	0           	Open  	;
+ 3               	2               	4               	100     	0.300           	0.007         	0           	Open  	;
+ 4               	4               	5               	100     	0.300           	0.007         	0           	Open  	;
+ 5               	5               	6               	100     	0.150           	0.007         	0           	Open  	;
+ 6               	5               	7               	100     	0.300           	0.007         	0           	Open  	;
+ 7               	7               	8               	100     	0.300           	0.007         	0           	Open  	;
+
+
+[COORDINATES]
+;Node            	X-Coord         	Y-Coord
+ 0              	0.0              	0.00   
+ 1              	100              	0.00   
+ 2              	200              	0.00   
+ 3              	200.0              	100.0 
+ 4              	300.0              	0.0 
+ 5              	400.0              	0.0
+ 6              	400.0              	100.0  
+ 7              	500.0              	0.0 
+ 6              	600.0              	0.0 
+   
